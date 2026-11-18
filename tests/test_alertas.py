@@ -27,7 +27,7 @@ def test_detecta_peces_muy_juntos():
 def test_detecta_perdida_y_reaparicion():
     datos = [
         d(20, "A", 100, 100, 160, 140),
-        d(24, "A", 120, 100, 180, 140),
+        d(24, "A", 100, 120, 160, 160),
     ]
     alertas = MotorAlertas().analizar(datos)
     assert any(a.tipo == "PERDIDA_SEGUIMIENTO" and a.cuadro == 21 for a in alertas)
@@ -45,7 +45,7 @@ def test_detecta_id_duplicado_en_mismo_cuadro():
 def test_detecta_eventos_de_conteo_muy_cercanos():
     datos = [
         d(40, "A", 100, 100, 160, 140, timestamp_ms=1000, contado=True),
-        d(42, "A", 120, 100, 180, 140, timestamp_ms=1070, contado=True),
+        d(42, "A", 100, 110, 160, 150, timestamp_ms=1070, contado=True),
     ]
     alertas = MotorAlertas().analizar(datos)
     assert any(a.tipo == "POSIBLE_DUPLICADO" and a.cuadro == 42 for a in alertas)

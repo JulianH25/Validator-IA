@@ -1,10 +1,7 @@
-"""Detección de posibles anomalías en los resultados del tracker.
-
-El motor trabaja con las detecciones ya cargadas por ``resultados.py`` y no
-modifica ni el video ni el CSV original. Cada alerta conserva el número de
-cuadro interno (base 0) para que el visor pueda saltar directamente a él.
-"""
+"""Alertas sobre detecciones de salmones que descienden por dos tubos."""
 from collections import defaultdict
+import json
+from pathlib import Path
 from dataclasses import dataclass, field
 from itertools import combinations
 from math import hypot
@@ -22,16 +19,15 @@ class Alerta:
 
 @dataclass
 class ConfiguracionAlertas:
-    # Umbrales provisionales para detectar peces sospechosamente cercanos.
     iou_minimo: float = 0.30
     distancia_centros_max_px: float = 28.0
 
-    # Si el mismo ID reaparece después de más cuadros faltantes, se avisa.
     max_cuadros_faltantes: int = 1
+    retroceso_vertical_min_px: float = 18.0
 
-    # Ventana provisional para dos eventos de conteo del mismo pez.
     ventana_duplicado_ms: int = 100
     ventana_duplicado_cuadros: int = 3
+    lineas_conteo_y_px: dict[str, float] = field(default_factory=dict)
 
 
 class MotorAlertas:
@@ -44,6 +40,9 @@ class MotorAlertas:
         alertas.extend(self._detectar_peces_juntos(detecciones))
         alertas.extend(self._detectar_perdidas_seguimiento(detecciones))
         alertas.extend(self._detectar_duplicados(detecciones))
+        alertas.extend(self._detectar_retroceso_vertical(detecciones))
+        alertas.extend(self._detectar_aparicion_un_cuadro(detecciones))
+        alertas.extend(self._detectar_inicio_bajo_linea(detecciones))
         return sorted(alertas, key=lambda a: (a.cuadro, a.tipo, str(a.canal)))
 
     @staticmethod
@@ -109,7 +108,6 @@ class MotorAlertas:
                         )
                     )
 
-        # No repetir la misma pareja en cada cuadro consecutivo.
         candidatas.sort(key=lambda a: (str(a.canal), a.ids_pez, a.cuadro))
         resultado = []
         ultimo_por_pareja = {}
@@ -152,10 +150,45 @@ class MotorAlertas:
                     )
         return alertas
 
+    def _detectar_retroceso_vertical(self, detecciones):
+        por_pez = defaultdict(lambda: defaultdict(list))
+        for d in detecciones:
+            por_pez[(d.canal, d.id_pez)][d.cuadro].append(d)
+
+        alertas = []
+        for (canal, id_pez), por_cuadro in por_pez.items():
+            cuadros = sorted(por_cuadro)
+            ultimo_evento = None
+            for anterior, actual in zip(cuadros, cuadros[1:]):
+                if actual - anterior != 1:
+                    ultimo_evento = None
+                    continue
+                y_anterior = sum((d.y1 + d.y2) / 2 for d in por_cuadro[anterior]) / len(por_cuadro[anterior])
+                y_actual = sum((d.y1 + d.y2) / 2 for d in por_cuadro[actual]) / len(por_cuadro[actual])
+                retroceso = y_anterior - y_actual
+                if retroceso < self.config.retroceso_vertical_min_px:
+                    ultimo_evento = None
+                    continue
+                if ultimo_evento == anterior:
+                    ultimo_evento = actual
+                    continue
+                alertas.append(
+                    Alerta(
+                        tipo="MOVIMIENTO_CONTRARIO",
+                        cuadro=actual,
+                        canal=canal,
+                        ids_pez=(id_pez,),
+                        mensaje=(f"Movimiento hacia arriba - cuadro {actual + 1} - "
+                                 f"Tubo {canal} - ID {id_pez}"),
+                        detalles={"retroceso_y_px": round(retroceso, 2)},
+                    )
+                )
+                ultimo_evento = actual
+        return alertas
+
     def _detectar_duplicados(self, detecciones):
         alertas = []
 
-        # Caso 1: el mismo ID aparece repetido dentro del mismo cuadro y tubo.
         por_cuadro = defaultdict(list)
         for d in detecciones:
             por_cuadro[(d.canal, d.cuadro, d.id_pez)].append(d)
@@ -176,7 +209,6 @@ class MotorAlertas:
                     )
                 )
 
-        # Caso 2: si el tracker entrega eventos de conteo, comparar sus tiempos.
         eventos = defaultdict(list)
         for d in detecciones:
             if getattr(d, "contado", False):
@@ -205,7 +237,6 @@ class MotorAlertas:
                     detalle = {"delta_cuadros": delta_cuadros}
 
                 if es_duplicado:
-                    # Evitar duplicar una alerta que ya salió por mismo cuadro.
                     if any(
                         a.tipo == "POSIBLE_DUPLICADO"
                         and a.cuadro == actual.cuadro
@@ -229,3 +260,82 @@ class MotorAlertas:
                     )
 
         return alertas
+
+    def _detectar_aparicion_un_cuadro(self, detecciones):
+        por_pez = defaultdict(set)
+        for d in detecciones:
+            por_pez[(d.canal, d.id_pez)].add(d.cuadro)
+
+        alertas = []
+        if not detecciones:
+            return alertas
+        inicio = min(d.cuadro for d in detecciones)
+        fin = max(d.cuadro for d in detecciones)
+
+        for (canal, id_pez), cuadros in por_pez.items():
+            if len(cuadros) != 1:
+                continue
+            cuadro = next(iter(cuadros))
+            alertas.append(
+                Alerta(
+                    tipo="APARICION_UN_CUADRO",
+                    cuadro=cuadro,
+                    canal=canal,
+                    ids_pez=(id_pez,),
+                    mensaje=(f"ID visible en un solo cuadro - cuadro {cuadro + 1} - "
+                             f"Tubo {canal} - ID {id_pez}"),
+                    detalles={"en_borde_datos": cuadro in (inicio, fin)},
+                )
+            )
+        return alertas
+
+    def _detectar_inicio_bajo_linea(self, detecciones):
+        primeras = defaultdict(list)
+        for d in detecciones:
+            primeras[(d.canal, d.id_pez)].append(d)
+
+        alertas = []
+        for (canal, id_pez), registros in primeras.items():
+            y_linea = self.config.lineas_conteo_y_px.get(str(canal))
+            if y_linea is None:
+                continue
+            primer_cuadro = min(d.cuadro for d in registros)
+            primeras_detecciones = [d for d in registros if d.cuadro == primer_cuadro]
+            centro_y = max((d.y1 + d.y2) / 2 for d in primeras_detecciones)
+            # En la imagen, hacia abajo corresponde a Y creciente.
+            if centro_y <= y_linea:
+                continue
+            alertas.append(
+                Alerta(
+                    tipo="INICIO_BAJO_LINEA",
+                    cuadro=primer_cuadro,
+                    canal=canal,
+                    ids_pez=(id_pez,),
+                    mensaje=(f"Primera aparición bajo la línea - cuadro "
+                             f"{primer_cuadro + 1} - Tubo {canal} - ID {id_pez}"),
+                    detalles={"centro_y_px": centro_y, "linea_y_px": y_linea,
+                              "inicio_video": primer_cuadro == 0},
+                )
+            )
+        return alertas
+
+
+def cargar_lineas_conteo(ruta):
+    ruta = Path(ruta)
+    if not ruta.exists():
+        return {}
+    with ruta.open(encoding="utf-8") as archivo:
+        config = json.load(archivo)
+    lineas = config.get("lineas_conteo_y_px")
+    if not isinstance(lineas, dict):
+        raise ValueError("Se esperaba 'lineas_conteo_y_px' como objeto.")
+    resultado = {}
+    for tubo in ("1", "2"):
+        valor = lineas.get(tubo)
+        if valor is None:
+            continue
+        if (isinstance(valor, bool) or not isinstance(valor, (int, float))
+                or not 0 <= valor < float("inf")):
+            raise ValueError(f"La línea del tubo {tubo} debe ser un número en píxeles.")
+        resultado[tubo] = float(valor)
+    return resultado
