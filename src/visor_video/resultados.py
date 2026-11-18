@@ -1,4 +1,4 @@
-"""Lectura y agrupación por canal (tubo) de los resultados del Tracker.
+"""Lectura y agrupación de detecciones de dos tubos con caída vertical.
 
 Formato esperado (CSV, una fila por pez detectado en un cuadro):
 
@@ -8,9 +8,9 @@ Formato esperado (CSV, una fila por pez detectado en un cuadro):
 
 - frame: número de cuadro, empezando en 0 (ver PRIMER_CUADRO).
 - track_id: identificador de seguimiento del pez.
-- x1,y1,x2,y2: caja en píxeles del video original (esquinas).
+- x1,y1,x2,y2: caja en píxeles del video original (y aumenta hacia abajo).
   Alternativa: x,y,w,h (esquina superior izquierda, ancho y alto).
-- canal: tubo al que pertenece (1, 2, 3...). También acepta nombres.
+- canal: tubo al que pertenece (1 o 2 en el visor actual).
 - timestamp_ms (opcional): tiempo del evento en milisegundos.
 - contado (opcional): indica si la fila corresponde a un evento de conteo.
 
@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 import cv2
 
-# Si el Tracker numera los cuadros desde 1, cambiar a 1.
+# Cambiar a 1 si el tracker numera desde 1.
 PRIMER_CUADRO = 0
 
 ALIAS = {
@@ -69,7 +69,6 @@ def etiqueta_canal(canal):
 
 
 def _clave_canal(canal):
-    # Orden natural: 1, 2, 10 y después los nombres.
     return (0, int(canal), "") if canal.isdigit() else (1, 0, canal)
 
 
