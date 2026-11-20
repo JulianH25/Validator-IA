@@ -7,8 +7,10 @@ from tkinter import messagebox, ttk
 
 try:
     from .correcciones import ErrorCorreccion, RegistroCorrecciones, ORIGEN_MANUAL
+    from .persistencia import describir_operacion
 except ImportError:
     from correcciones import ErrorCorreccion, RegistroCorrecciones, ORIGEN_MANUAL
+    from persistencia import describir_operacion
 
 BG = "#181A1F"
 PANEL = "#21252B"
@@ -136,6 +138,9 @@ class PanelCorrecciones(tk.Frame):
         self._boton(fila2, "Mover…", self.mover).pack(side="left", expand=True, fill="x", padx=(0, 3))
         self._btn_deshacer = self._boton(fila2, "↶ Deshacer  Ctrl+Z", self.deshacer)
         self._btn_deshacer.pack(side="left", expand=True, fill="x", padx=3)
+        fila3 = tk.Frame(self, bg=PANEL)
+        fila3.pack(fill="x", pady=(5, 0))
+        self._boton(fila3, "Ver historial", self.mostrar_historial).pack(fill="x")
         self.refrescar()
 
     @staticmethod
@@ -154,6 +159,10 @@ class PanelCorrecciones(tk.Frame):
 
     def limpiar(self):
         self.registro = None
+        self.refrescar()
+
+    def cargar_registro(self, registro):
+        self.registro = registro
         self.refrescar()
 
     def refrescar(self, seleccionar=None):
@@ -180,6 +189,29 @@ class PanelCorrecciones(tk.Frame):
             state="normal" if self.registro.puede_deshacer else "disabled")
         if self._al_cambiar:
             self._al_cambiar()
+
+
+    def mostrar_historial(self):
+        if not self._hay_registro():
+            return
+        ventana = tk.Toplevel(self)
+        ventana.title("Historial de cambios")
+        ventana.configure(bg=PANEL, padx=14, pady=14)
+        ventana.geometry("620x360")
+        ventana.transient(self.winfo_toplevel())
+
+        tk.Label(ventana, text="HISTORIAL DE CAMBIOS", bg=PANEL, fg=WHITE,
+                 font=(UI, 11, "bold")).pack(anchor="w", pady=(0, 9))
+        lista = tk.Listbox(ventana, bg=PANEL_ALT, fg=WHITE, font=(MONO, 9),
+                           selectbackground=BLUE, relief="flat",
+                           highlightthickness=1, highlightbackground=BORDER)
+        lista.pack(fill="both", expand=True)
+        for op in self.registro.historial:
+            lista.insert("end", describir_operacion(op))
+        if not self.registro.historial:
+            lista.insert("end", "Sin cambios registrados.")
+        tk.Button(ventana, text="Cerrar", command=ventana.destroy, bg=PANEL_ALT,
+                  fg=WHITE, relief="flat", padx=14, pady=6).pack(anchor="e", pady=(10, 0))
 
     def _seleccionado(self):
         seleccion = self._lista.curselection()
