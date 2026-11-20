@@ -16,11 +16,13 @@ try:
     from .alertas import MotorAlertas, cargar_lineas_conteo
     from .correcciones import eventos_desde_resultados
     from .panel_correcciones import PanelCorrecciones
+    from .persistencia import ErrorPersistencia, cargar_proyecto, guardar_proyecto
 except ImportError:
     from resultados import ErrorResultados, cargar_varios, etiqueta_canal
     from alertas import MotorAlertas, cargar_lineas_conteo
     from correcciones import eventos_desde_resultados
     from panel_correcciones import PanelCorrecciones
+    from persistencia import ErrorPersistencia, cargar_proyecto, guardar_proyecto
 
 
 BG = "#181A1F"
@@ -65,6 +67,11 @@ estado_lineas = None
 
 panel_correcciones = None
 
+ruta_video_actual = None
+rutas_csv_actuales = ()
+canales_csv_actuales = {}
+ruta_proyecto_actual = None
+
 alerta_seleccionada = None
 frames_tarjetas = []
 reproduciendo = False
@@ -93,38 +100,26 @@ def _etiqueta(padre, texto, color=WHITE, fuente=None, **kwargs):
                     font=fuente or (UI, 10), **kwargs)
 
 
-def cargar_video():
-    """Abre un video local y restaura la navegación al primer cuadro.
-
-    Si ya había resultados cargados (CSV primero y video después),
-    se conservan junto con sus correcciones.
-    """
-    global video, cuadro_actual, total_cuadros, fps_video
-    ruta = filedialog.askopenfilename(
-        filetypes=[("Video MP4", "*.mp4"), ("Todos", "*.*")]
-    )
-    if not ruta:
-        return
-    nuevo_video = cv2.VideoCapture(ruta)
+def _abrir_video_desde_ruta(ruta):
+    global video, cuadro_actual, total_cuadros, fps_video, ruta_video_actual
+    nuevo_video = cv2.VideoCapture(str(ruta))
     if not nuevo_video.isOpened():
-        messagebox.showerror("No se pudo abrir", "No fue posible abrir el video seleccionado.")
-        nuevo_video.release()
-        return
+        return False
 
     detener_reproduccion()
     if video is not None:
         video.release()
     video = nuevo_video
+    ruta_video_actual = str(Path(ruta).resolve())
     total_cuadros = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = float(video.get(cv2.CAP_PROP_FPS))
     fps_video = fps if math.isfinite(fps) and fps > 0 else 30.0
     cuadro_actual = 0
     if texto_video is not None:
-        texto_video.configure(text=f"VIDEO  {os.path.basename(ruta)[:31]}", fg=GREEN)
+        texto_video.configure(text=f"VIDEO  {os.path.basename(str(ruta))[:31]}", fg=GREEN)
     if estado_visor is not None:
         estado_visor.configure(text="VIDEO CARGADO", fg=GREEN)
 
-    # El registro de correcciones necesita saber cuántos cuadros tiene el video.
     if panel_correcciones is not None and panel_correcciones.registro is not None:
         panel_correcciones.registro.total_cuadros = total_cuadros or None
 
@@ -136,6 +131,17 @@ def cargar_video():
         )
     mostrar_cuadro()
     _dibujar_timeline()
+    return True
+
+
+def cargar_video():
+    ruta = filedialog.askopenfilename(
+        filetypes=[("Video MP4", "*.mp4"), ("Todos", "*.*")]
+    )
+    if not ruta:
+        return
+    if not _abrir_video_desde_ruta(ruta):
+        messagebox.showerror("No se pudo abrir", "No fue posible abrir el video seleccionado.")
 
 
 def _canales_no_admitidos(canales):
@@ -154,19 +160,26 @@ def _preguntar_tubo(ruta):
     return "1" if respuesta else "2"
 
 
-def cargar_resultados():
-    """Carga datos del tracker (un archivo con los 2 tubos, o uno por tubo)."""
-    global resultados, etiqueta_a_canal
-    rutas = filedialog.askopenfilenames(
-        filetypes=[("Resultados del tracker", "*.csv"), ("Todos", "*.*")]
-    )
-    if not rutas:
-        return
+def _cargar_resultados_desde_rutas(rutas, canales_guardados=None, registro_restaurado=None):
+    global resultados, etiqueta_a_canal, rutas_csv_actuales, canales_csv_actuales
+    rutas = tuple(str(Path(r).resolve()) for r in rutas)
+    guardados = {str(Path(k).resolve()): str(v) for k, v in (canales_guardados or {}).items()}
+    resueltos = {}
+
+    def resolver(ruta):
+        clave = str(Path(ruta).resolve())
+        if clave in guardados:
+            return guardados[clave]
+        canal = _preguntar_tubo(ruta)
+        if canal is not None:
+            resueltos[clave] = canal
+        return canal
+
     try:
-        nuevos = cargar_varios(rutas, resolver_canal=_preguntar_tubo)
+        nuevos = cargar_varios(rutas, resolver_canal=resolver)
     except (ErrorResultados, OSError) as exc:
         messagebox.showerror("No se pudieron cargar los resultados", str(exc))
-        return
+        return False
 
     no_admitidos = _canales_no_admitidos(nuevos.canales)
     if no_admitidos:
@@ -176,16 +189,18 @@ def cargar_resultados():
             "Canales encontrados fuera de ese rango: " + ", ".join(no_admitidos) + ".\n"
             "Revisa el CSV o consulta con el responsable de los datos del tracker.",
         )
-        return
+        return False
 
     _cargar_configuracion_lineas()
     resultados = nuevos
+    rutas_csv_actuales = rutas
+    canales_csv_actuales = dict(guardados)
+    canales_csv_actuales.update(resueltos)
     etiqueta_a_canal = {nombre: canal for nombre, canal in FILTROS.items() if canal is not None}
     menu_canal.configure(values=list(FILTROS), state="readonly")
     menu_canal.set(TODOS)
     if texto_csv is not None:
-        nombre = (os.path.basename(rutas[0]) if len(rutas) == 1
-                  else f"{len(rutas)} archivos")
+        nombre = os.path.basename(rutas[0]) if len(rutas) == 1 else f"{len(rutas)} archivos"
         texto_csv.configure(text=f"DATOS  {nombre[:31]}", fg=GREEN)
 
     if total_cuadros and resultados.ultimo_cuadro >= total_cuadros:
@@ -196,10 +211,110 @@ def cargar_resultados():
         )
 
     if panel_correcciones is not None:
-        panel_correcciones.cargar(eventos_desde_resultados(nuevos))
+        if registro_restaurado is None:
+            panel_correcciones.cargar(eventos_desde_resultados(nuevos))
+        else:
+            registro_restaurado.total_cuadros = total_cuadros or registro_restaurado.total_cuadros
+            panel_correcciones.cargar_registro(registro_restaurado)
     actualizar_alertas()
     mostrar_cuadro()
+    return True
 
+
+def cargar_resultados():
+    rutas = filedialog.askopenfilenames(
+        filetypes=[("Resultados del tracker", "*.csv"), ("Todos", "*.*")]
+    )
+    if rutas:
+        _cargar_resultados_desde_rutas(rutas)
+
+
+
+def guardar_proyecto_actual():
+    global ruta_proyecto_actual
+    if panel_correcciones is None or panel_correcciones.registro is None:
+        messagebox.showinfo("Sin proyecto", "Carga los resultados antes de guardar el proyecto.")
+        return
+
+    ruta = ruta_proyecto_actual
+    if not ruta:
+        ruta = filedialog.asksaveasfilename(
+            defaultextension=".validator.json",
+            filetypes=[("Proyecto Validator", "*.validator.json"), ("JSON", "*.json")],
+            initialfile="proyecto.validator.json",
+        )
+    if not ruta:
+        return
+    try:
+        guardar_proyecto(
+            ruta,
+            panel_correcciones.registro,
+            video=ruta_video_actual,
+            csvs=rutas_csv_actuales,
+            canales_csv=canales_csv_actuales,
+            cuadro=cuadro_actual,
+            filtro=menu_canal.get() if menu_canal is not None else TODOS,
+            lineas_conteo=motor_alertas.config.lineas_conteo_y_px,
+        )
+    except ErrorPersistencia as exc:
+        messagebox.showerror("No se pudo guardar", str(exc))
+        return
+    ruta_proyecto_actual = str(Path(ruta).resolve())
+    messagebox.showinfo("Proyecto guardado", "Las correcciones y el historial quedaron guardados.")
+
+
+def abrir_proyecto_guardado():
+    global resultados, etiqueta_a_canal, alerta_seleccionada, ruta_proyecto_actual
+    ruta = filedialog.askopenfilename(
+        filetypes=[("Proyecto Validator", "*.validator.json"), ("JSON", "*.json")]
+    )
+    if not ruta:
+        return
+    try:
+        proyecto = cargar_proyecto(ruta)
+    except ErrorPersistencia as exc:
+        messagebox.showerror("No se pudo abrir", str(exc))
+        return
+
+    faltantes = []
+    if proyecto.video and not Path(proyecto.video).exists():
+        faltantes.append(proyecto.video)
+    faltantes.extend(r for r in proyecto.csvs if not Path(r).exists())
+    if faltantes:
+        messagebox.showerror(
+            "Faltan archivos",
+            "No se puede reabrir el proyecto porque faltan archivos de origen:\n\n"
+            + "\n".join(faltantes[:5]),
+        )
+        return
+
+    resultados = None
+    etiqueta_a_canal = {}
+    alerta_seleccionada = None
+    if panel_correcciones is not None:
+        panel_correcciones.limpiar()
+
+    if proyecto.video and not _abrir_video_desde_ruta(proyecto.video):
+        messagebox.showerror("No se pudo abrir", "No fue posible abrir el video del proyecto.")
+        return
+    if proyecto.csvs and not _cargar_resultados_desde_rutas(
+        proyecto.csvs, proyecto.canales_csv, proyecto.registro
+    ):
+        return
+    if not proyecto.csvs and panel_correcciones is not None:
+        panel_correcciones.cargar_registro(proyecto.registro)
+
+    motor_alertas.config.lineas_conteo_y_px = dict(proyecto.lineas_conteo)
+    _actualizar_estado_lineas()
+    actualizar_alertas()
+
+    if menu_canal is not None and proyecto.filtro in FILTROS:
+        menu_canal.set(proyecto.filtro)
+    if panel_correcciones is not None:
+        panel_correcciones.refrescar()
+    if video is not None and total_cuadros > 0:
+        ir_a_frame(min(proyecto.cuadro, total_cuadros - 1))
+    ruta_proyecto_actual = str(Path(ruta).resolve())
 
 
 def _cargar_configuracion_lineas():
@@ -210,13 +325,18 @@ def _cargar_configuracion_lineas():
         motor_alertas.config.lineas_conteo_y_px = {}
         if ventana is not None:
             messagebox.showwarning("Líneas de conteo", str(exc))
-    if estado_lineas is not None:
-        lineas = motor_alertas.config.lineas_conteo_y_px
-        sin_linea = [t for t in TUBOS if t not in lineas]
-        texto = ("LÍNEAS SIN CONFIGURAR: " + ", ".join("T" + t for t in sin_linea)
-                 if sin_linea else "LÍNEAS CONFIGURADAS: " + ", ".join(
-                     f"T{t} y={lineas[str(t)]:g}" for t in TUBOS))
-        estado_lineas.configure(text=texto, fg=AMBER if sin_linea else GREEN)
+    _actualizar_estado_lineas()
+
+
+def _actualizar_estado_lineas():
+    if estado_lineas is None:
+        return
+    lineas = motor_alertas.config.lineas_conteo_y_px
+    sin_linea = [t for t in TUBOS if t not in lineas]
+    texto = ("LÍNEAS SIN CONFIGURAR: " + ", ".join("T" + t for t in sin_linea)
+             if sin_linea else "LÍNEAS CONFIGURADAS: " + ", ".join(
+                 f"T{t} y={lineas[str(t)]:g}" for t in TUBOS))
+    estado_lineas.configure(text=texto, fg=AMBER if sin_linea else GREEN)
 
 
 def actualizar_alertas():
@@ -632,7 +752,9 @@ def main():
     texto_csv.pack(anchor="w", pady=(3, 0))
 
     _boton(barra, "Cargar video", cargar_video, compacto=True).pack(side="left", padx=(5, 6))
-    _boton(barra, "Cargar CSV", cargar_resultados, compacto=True).pack(side="left", padx=(0, 14))
+    _boton(barra, "Cargar CSV", cargar_resultados, compacto=True).pack(side="left", padx=(0, 6))
+    _boton(barra, "Abrir proyecto", abrir_proyecto_guardado, compacto=True).pack(side="left", padx=(0, 6))
+    _boton(barra, "Guardar proyecto", guardar_proyecto_actual, compacto=True).pack(side="left", padx=(0, 14))
 
     selector = tk.Frame(barra, bg=PANEL)
     selector.pack(side="right", padx=(4, 21), pady=10)
@@ -759,6 +881,7 @@ def main():
 
     ventana.bind("<KeyPress>", _tecla)
     ventana.bind("<Control-z>", lambda e: panel_correcciones.deshacer())
+    ventana.bind("<Control-s>", lambda e: guardar_proyecto_actual())
     ventana.protocol("WM_DELETE_WINDOW", _cerrar)
     _construir_tarjetas()
     _dibujar_timeline()
