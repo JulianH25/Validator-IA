@@ -12,15 +12,15 @@ import cv2
 from PIL import Image, ImageTk
 
 try:
-    from .resultados import ErrorResultados, cargar_varios, etiqueta_canal  
+    from .resultados import ErrorResultados, cargar_varios, etiqueta_canal
     from .alertas import MotorAlertas, cargar_lineas_conteo
-    from .correcciones import eventos_desde_resultados          
+    from .correcciones import eventos_desde_resultados
     from .panel_correcciones import PanelCorrecciones
 except ImportError:
     from resultados import ErrorResultados, cargar_varios, etiqueta_canal
     from alertas import MotorAlertas, cargar_lineas_conteo
-    from correcciones import eventos_desde_resultados           # en el except
-    from panel_correcciones import PanelCorrecciones 
+    from correcciones import eventos_desde_resultados
+    from panel_correcciones import PanelCorrecciones
 
 
 BG = "#181A1F"
