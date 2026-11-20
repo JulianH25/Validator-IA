@@ -10,7 +10,8 @@ Formato esperado (CSV, una fila por pez detectado en un cuadro):
 - track_id: identificador de seguimiento del pez.
 - x1,y1,x2,y2: caja en píxeles del video original (y aumenta hacia abajo).
   Alternativa: x,y,w,h (esquina superior izquierda, ancho y alto).
-- canal: tubo al que pertenece (1 o 2 en el visor actual).
+- canal: tubo al que pertenece (1 o 2 en el visor actual). Puede faltar si
+  el archivo es de un solo tubo (ver cargar_varios).
 - timestamp_ms (opcional): tiempo del evento en milisegundos.
 - contado (opcional): indica si la fila corresponde a un evento de conteo.
 
@@ -20,6 +21,8 @@ Si el formato final cambia, solo hay que tocar este archivo.
 """
 
 import csv
+import os
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -48,6 +51,10 @@ ALIAS = {
 
 class ErrorResultados(Exception):
     """Error de lectura con un mensaje pensado para mostrar al usuario."""
+
+
+class ErrorSinCanal(ErrorResultados):
+    """El archivo no tiene columna de canal (típico: un archivo por tubo)."""
 
 
 @dataclass(frozen=True)
@@ -108,7 +115,7 @@ class Resultados:
         }
 
 
-def _buscar_columnas(encabezado):
+def _buscar_columnas(encabezado, canal_defecto=None):
     normal = {nombre.strip().lower(): nombre for nombre in encabezado}
 
     def buscar(clave):
@@ -129,19 +136,29 @@ def _buscar_columnas(encabezado):
     else:
         columnas["formato_caja"] = None
 
-    faltan = [k for k in ("frame", "id", "canal") if columnas[k] is None]
+    faltan = [
+        k for k in ("frame", "id", "canal")
+        if columnas[k] is None and not (k == "canal" and canal_defecto is not None)
+    ]
     if columnas["formato_caja"] is None:
         faltan.append("caja (x1,y1,x2,y2 o x,y,w,h)")
     if faltan:
-        raise ErrorResultados(
+        mensaje = (
             "Al archivo le faltan columnas: " + ", ".join(faltan) + ".\n"
             "Columnas encontradas: " + ", ".join(encabezado)
         )
+        if faltan == ["canal"]:
+            raise ErrorSinCanal(mensaje)
+        raise ErrorResultados(mensaje)
     return columnas
 
 
-def cargar_csv(ruta):
-    """Lee el CSV del Tracker y devuelve un objeto Resultados."""
+def cargar_csv(ruta, canal_defecto=None):
+    """Lee el CSV del Tracker y devuelve un objeto Resultados.
+
+    Si el archivo no trae columna de canal (un archivo por tubo), todas
+    sus filas se asignan a `canal_defecto`.
+    """
     try:
         with open(ruta, newline="", encoding="utf-8-sig") as archivo:
             muestra = archivo.read(4096)
@@ -153,7 +170,7 @@ def cargar_csv(ruta):
             lector = csv.DictReader(archivo, dialect=dialecto)
             if not lector.fieldnames:
                 raise ErrorResultados("El archivo está vacío.")
-            col = _buscar_columnas(lector.fieldnames)
+            col = _buscar_columnas(lector.fieldnames, canal_defecto)
 
             detecciones = []
             for n_linea, fila in enumerate(lector, start=2):
@@ -196,7 +213,8 @@ def cargar_csv(ruta):
                         cuadro=cuadro,
                         id_pez=str(fila[col["id"]]).strip(),
                         x1=x1, y1=y1, x2=x2, y2=y2,
-                        canal=str(fila[col["canal"]]).strip(),
+                        canal=(str(canal_defecto) if col["canal"] is None
+                               else str(fila[col["canal"]]).strip()),
                         timestamp_ms=timestamp_ms,
                         contado=contado,
                     )
@@ -208,6 +226,64 @@ def cargar_csv(ruta):
 
     if not detecciones:
         raise ErrorResultados("El archivo no tiene detecciones.")
+    return Resultados(detecciones)
+
+
+def canal_desde_nombre(ruta):
+    """Intenta leer el tubo del nombre del archivo.
+
+    'tracking_tubo1.csv' -> '1', 'canal_2.csv' -> '2', 'salida_t2.csv' -> '2'.
+    Devuelve None si el nombre no lo dice.
+    """
+    nombre = os.path.splitext(os.path.basename(str(ruta)))[0].lower()
+    m = re.search(r"(?<![a-z])(?:tubo|tube|canal|channel|ch|t)[ _\-]?(\d+)(?!\d)", nombre)
+    return m.group(1) if m else None
+
+
+def cargar_varios(rutas, resolver_canal=None):
+    """Carga uno o varios CSV del Tracker y los junta en un solo Resultados.
+
+    Soporta los dos casos:
+      - un archivo con los dos tubos (columna de canal), o
+      - un archivo por tubo (sin columna de canal).
+
+    Para un archivo sin columna de canal, el tubo se toma del nombre del
+    archivo; si el nombre no lo dice, se llama a `resolver_canal(ruta)`
+    (en el visor, pregunta al usuario). Cada canal debe venir de un solo
+    archivo.
+    """
+    rutas = list(rutas)
+    if not rutas:
+        raise ErrorResultados("No se eligió ningún archivo.")
+    varios = len(rutas) > 1
+    detecciones = []
+    origen = {}  # canal -> nombre de archivo
+    for ruta in rutas:
+        nombre = os.path.basename(str(ruta))
+        try:
+            try:
+                parcial = cargar_csv(ruta)
+            except ErrorSinCanal:
+                canal = canal_desde_nombre(ruta)
+                if canal is None and resolver_canal is not None:
+                    canal = resolver_canal(ruta)
+                if canal is None:
+                    raise ErrorResultados(
+                        "El archivo no tiene columna de canal y no se pudo saber "
+                        "a qué tubo corresponde. Agrega la columna 'canal' o "
+                        "nombra el archivo, por ejemplo, tracking_tubo1.csv."
+                    )
+                parcial = cargar_csv(ruta, canal_defecto=canal)
+        except ErrorResultados as exc:
+            raise ErrorResultados(f"{nombre}: {exc}" if varios else str(exc))
+        for canal in parcial.canales:
+            if canal in origen:
+                raise ErrorResultados(
+                    f"El canal {canal} viene en «{origen[canal]}» y también en "
+                    f"«{nombre}». Cada tubo debe venir de un solo archivo."
+                )
+            origen[canal] = nombre
+        detecciones.extend(parcial.detecciones)
     return Resultados(detecciones)
 
 

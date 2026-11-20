@@ -12,11 +12,15 @@ import cv2
 from PIL import Image, ImageTk
 
 try:
-    from .resultados import ErrorResultados, cargar_csv, etiqueta_canal
+    from .resultados import ErrorResultados, cargar_varios, etiqueta_canal  
     from .alertas import MotorAlertas, cargar_lineas_conteo
+    from .correcciones import eventos_desde_resultados          
+    from .panel_correcciones import PanelCorrecciones
 except ImportError:
-    from resultados import ErrorResultados, cargar_csv, etiqueta_canal
+    from resultados import ErrorResultados, cargar_varios, etiqueta_canal
     from alertas import MotorAlertas, cargar_lineas_conteo
+    from correcciones import eventos_desde_resultados           # en el except
+    from panel_correcciones import PanelCorrecciones 
 
 
 BG = "#181A1F"
@@ -59,6 +63,8 @@ boton_play = None
 estado_visor = None
 estado_lineas = None
 
+panel_correcciones = None
+
 alerta_seleccionada = None
 frames_tarjetas = []
 reproduciendo = False
@@ -88,9 +94,12 @@ def _etiqueta(padre, texto, color=WHITE, fuente=None, **kwargs):
 
 
 def cargar_video():
-    """Abre un video local y restaura la navegación al primer cuadro."""
+    """Abre un video local y restaura la navegación al primer cuadro.
+
+    Si ya había resultados cargados (CSV primero y video después),
+    se conservan junto con sus correcciones.
+    """
     global video, cuadro_actual, total_cuadros, fps_video
-    global resultados, etiqueta_a_canal
     ruta = filedialog.askopenfilename(
         filetypes=[("Video MP4", "*.mp4"), ("Todos", "*.*")]
     )
@@ -110,17 +119,21 @@ def cargar_video():
     fps = float(video.get(cv2.CAP_PROP_FPS))
     fps_video = fps if math.isfinite(fps) and fps > 0 else 30.0
     cuadro_actual = 0
-    resultados = None
-    etiqueta_a_canal = {}
-    if texto_csv is not None:
-        texto_csv.configure(text="DATOS  Sin cargar", fg=MUTED)
-    if menu_canal is not None:
-        menu_canal.set(TODOS)
-    actualizar_alertas()
     if texto_video is not None:
         texto_video.configure(text=f"VIDEO  {os.path.basename(ruta)[:31]}", fg=GREEN)
     if estado_visor is not None:
         estado_visor.configure(text="VIDEO CARGADO", fg=GREEN)
+
+    # El registro de correcciones necesita saber cuántos cuadros tiene el video.
+    if panel_correcciones is not None and panel_correcciones.registro is not None:
+        panel_correcciones.registro.total_cuadros = total_cuadros or None
+
+    if resultados is not None and total_cuadros and resultados.ultimo_cuadro >= total_cuadros:
+        messagebox.showwarning(
+            "Revisa los archivos",
+            f"Los resultados llegan al cuadro {resultados.ultimo_cuadro + 1}, "
+            f"pero el video tiene {total_cuadros} cuadros. ¿Son del mismo video?",
+        )
     mostrar_cuadro()
     _dibujar_timeline()
 
@@ -129,17 +142,28 @@ def _canales_no_admitidos(canales):
     """Identifica valores que no son Tubo 1 ni Tubo 2, sin perder datos."""
     return [str(canal) for canal in canales if str(canal) not in TUBOS]
 
+def _preguntar_tubo(ruta):
+    """Se usa cuando un archivo no trae canal ni lo dice el nombre."""
+    respuesta = messagebox.askyesnocancel(
+        "¿De qué tubo es este archivo?",
+        f"«{os.path.basename(ruta)}» no indica el tubo.\n\n"
+        "Sí  =  Tubo 1\nNo  =  Tubo 2\nCancelar  =  no cargar",
+    )
+    if respuesta is None:
+        return None
+    return "1" if respuesta else "2"
+
 
 def cargar_resultados():
-    """Carga datos del tracker para dos tubos y calcula alertas."""
+    """Carga datos del tracker (un archivo con los 2 tubos, o uno por tubo)."""
     global resultados, etiqueta_a_canal
-    ruta = filedialog.askopenfilename(
+    rutas = filedialog.askopenfilenames(
         filetypes=[("Resultados del tracker", "*.csv"), ("Todos", "*.*")]
     )
-    if not ruta:
+    if not rutas:
         return
     try:
-        nuevos = cargar_csv(ruta)
+        nuevos = cargar_varios(rutas, resolver_canal=_preguntar_tubo)
     except (ErrorResultados, OSError) as exc:
         messagebox.showerror("No se pudieron cargar los resultados", str(exc))
         return
@@ -160,7 +184,9 @@ def cargar_resultados():
     menu_canal.configure(values=list(FILTROS), state="readonly")
     menu_canal.set(TODOS)
     if texto_csv is not None:
-        texto_csv.configure(text=f"DATOS  {os.path.basename(ruta)[:31]}", fg=GREEN)
+        nombre = (os.path.basename(rutas[0]) if len(rutas) == 1
+                  else f"{len(rutas)} archivos")
+        texto_csv.configure(text=f"DATOS  {nombre[:31]}", fg=GREEN)
 
     if total_cuadros and resultados.ultimo_cuadro >= total_cuadros:
         messagebox.showwarning(
@@ -168,8 +194,12 @@ def cargar_resultados():
             f"Los resultados llegan al cuadro {resultados.ultimo_cuadro + 1}, "
             f"pero el video tiene {total_cuadros} cuadros. ¿Son del mismo video?",
         )
+
+    if panel_correcciones is not None:
+        panel_correcciones.cargar(eventos_desde_resultados(nuevos))
     actualizar_alertas()
     mostrar_cuadro()
+
 
 
 def _cargar_configuracion_lineas():
@@ -224,6 +254,8 @@ def canal_elegido():
 
 
 def al_cambiar_canal(evento=None):
+    if panel_correcciones is not None:
+        panel_correcciones.refrescar()
     mostrar_cuadro()
 
 
@@ -556,6 +588,7 @@ def main():
     global ventana, visor, texto_cuadro, texto_tiempo, texto_alertas
     global menu_canal, texto_video, texto_csv, timeline, boton_play
     global panel_tarjetas, canvas_alertas, estado_visor, estado_lineas
+    global panel_correcciones
 
     ventana = tk.Tk()
     ventana.title("Visor de Auditoría - Tracker Salmones")
@@ -702,17 +735,30 @@ def main():
     panel_tarjetas.bind("<MouseWheel>", _al_mousewheel)
 
     footer = tk.Frame(derecha, bg=PANEL)
-    footer.pack(fill="x", padx=15, pady=14)
+    footer.pack(fill="x", side="bottom", padx=15, pady=14,
+                before=panel_scrolling)
     _boton(footer, "Ir a alerta seleccionada  ↗", ir_a_alerta,
            compacto=True).pack(fill="x")
-    _etiqueta(footer, "Resultados del tracker · Solo lectura",
+    _etiqueta(footer, "Resultados del tracker · Correcciones editables",
               MUTED, (UI, 8)).pack(pady=(9, 0))
     estado_lineas = _etiqueta(footer, "", AMBER, (MONO, 8),
                              wraplength=300, justify="center")
     estado_lineas.pack(pady=(5, 0))
     _cargar_configuracion_lineas()
 
+    panel_correcciones = PanelCorrecciones(
+        derecha,
+        obtener_canal=canal_elegido,
+        obtener_cuadro=lambda: cuadro_actual,
+        obtener_total=lambda: total_cuadros,
+        ir_a_frame=ir_a_frame,
+        canales=TUBOS,
+    )
+    panel_correcciones.pack(fill="x", side="bottom", padx=15, pady=(0, 6),
+                            before=panel_scrolling)
+
     ventana.bind("<KeyPress>", _tecla)
+    ventana.bind("<Control-z>", lambda e: panel_correcciones.deshacer())
     ventana.protocol("WM_DELETE_WINDOW", _cerrar)
     _construir_tarjetas()
     _dibujar_timeline()
