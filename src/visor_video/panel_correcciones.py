@@ -31,7 +31,8 @@ class _DialogoEvento(tk.Toplevel):
         self.title(titulo)
         self.configure(bg=PANEL, padx=18, pady=16)
         self.resizable(False, False)
-        self.transient(padre.winfo_toplevel())
+        self._padre_ventana = padre.winfo_toplevel()
+        self.transient(self._padre_ventana)
         self.resultado = None
         self._canales = canales
         self._total = total
@@ -61,9 +62,20 @@ class _DialogoEvento(tk.Toplevel):
 
         self.bind("<Return>", lambda e: self._aceptar())
         self.bind("<Escape>", lambda e: self.destroy())
-        self._cuadro.focus_set()
-        self._cuadro.selection_range(0, "end")
+        self.update_idletasks()
+        raiz = self._padre_ventana
+        x = raiz.winfo_rootx() + max(0, (raiz.winfo_width() - self.winfo_reqwidth()) // 2)
+        y = raiz.winfo_rooty() + max(0, (raiz.winfo_height() - self.winfo_reqheight()) // 2)
+        self.geometry(f"+{x}+{y}")
+
+        self.deiconify()
+        self.lift()
+        self.attributes("-topmost", True)
+        self.after(150, lambda: self.attributes("-topmost", False) if self.winfo_exists() else None)
+        self.wait_visibility()
         self.grab_set()
+        self._cuadro.focus_force()
+        self._cuadro.selection_range(0, "end")
         self.wait_window()
 
     def _aceptar(self):
@@ -134,7 +146,6 @@ class PanelCorrecciones(tk.Frame):
                          relief="flat", borderwidth=0, cursor="hand2",
                          padx=6, pady=6, highlightthickness=0)
 
-    # ---------- ciclo de vida ----------
     def cargar(self, eventos):
         self.registro = RegistroCorrecciones(
             eventos, self._canales, self._obtener_total() or None
@@ -145,7 +156,6 @@ class PanelCorrecciones(tk.Frame):
         self.registro = None
         self.refrescar()
 
-    # ---------- vista ----------
     def refrescar(self, seleccionar=None):
         self._lista.delete(0, "end")
         self._ids = []
@@ -171,7 +181,6 @@ class PanelCorrecciones(tk.Frame):
         if self._al_cambiar:
             self._al_cambiar()
 
-    # ---------- acciones ----------
     def _seleccionado(self):
         seleccion = self._lista.curselection()
         if not seleccion:
@@ -194,8 +203,8 @@ class PanelCorrecciones(tk.Frame):
 
     def agregar(self):
         if not self._hay_registro():
-                self.registro.total_cuadros = self._obtener_total() or None
-                return
+            return
+        self.registro.total_cuadros = self._obtener_total() or None
         canal, cuadro = self._obtener_canal(), self._obtener_cuadro()
         if canal is None:  # filtro "Todos": hay que elegir el tubo
             datos = _DialogoEvento(self, "Agregar conteo", self._canales,
@@ -225,8 +234,8 @@ class PanelCorrecciones(tk.Frame):
 
     def mover(self):
         if not self._hay_registro():
-            self.registro.total_cuadros = self._obtener_total() or None
             return
+        self.registro.total_cuadros = self._obtener_total() or None
         evento_id = self._seleccionado()
         if evento_id is None:
             return

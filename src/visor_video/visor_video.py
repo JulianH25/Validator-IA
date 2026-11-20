@@ -12,15 +12,15 @@ import cv2
 from PIL import Image, ImageTk
 
 try:
-    from .resultados import ErrorResultados, cargar_varios, etiqueta_canal  
+    from .resultados import ErrorResultados, cargar_varios, etiqueta_canal
     from .alertas import MotorAlertas, cargar_lineas_conteo
-    from .correcciones import eventos_desde_resultados          
+    from .correcciones import eventos_desde_resultados
     from .panel_correcciones import PanelCorrecciones
 except ImportError:
     from resultados import ErrorResultados, cargar_varios, etiqueta_canal
     from alertas import MotorAlertas, cargar_lineas_conteo
-    from correcciones import eventos_desde_resultados           # en el except
-    from panel_correcciones import PanelCorrecciones 
+    from correcciones import eventos_desde_resultados
+    from panel_correcciones import PanelCorrecciones
 
 
 BG = "#181A1F"
@@ -153,17 +153,6 @@ def _preguntar_tubo(ruta):
         return None
     return "1" if respuesta else "2"
 
-def _preguntar_tubo(ruta):
-    """Se usa cuando un archivo no trae canal ni lo dice el nombre."""
-    respuesta = messagebox.askyesnocancel(
-        "¿De qué tubo es este archivo?",
-        f"«{os.path.basename(ruta)}» no indica el tubo.\n\n"
-        "Sí  =  Tubo 1\nNo  =  Tubo 2\nCancelar  =  no cargar",
-    )
-    if respuesta is None:
-        return None
-    return "1" if respuesta else "2"
-
 
 def cargar_resultados():
     """Carga datos del tracker (un archivo con los 2 tubos, o uno por tubo)."""
@@ -211,23 +200,6 @@ def cargar_resultados():
     actualizar_alertas()
     mostrar_cuadro()
 
-    _cargar_configuracion_lineas()
-    resultados = nuevos
-    etiqueta_a_canal = {nombre: canal for nombre, canal in FILTROS.items() if canal is not None}
-    menu_canal.configure(values=list(FILTROS), state="readonly")
-    menu_canal.set(TODOS)
-    if texto_csv is not None:
-        texto_csv.configure(text=f"DATOS  {os.path.basename(ruta)[:31]}", fg=GREEN)
-
-    if total_cuadros and resultados.ultimo_cuadro >= total_cuadros:
-        messagebox.showwarning(
-            "Revisa los archivos",
-            f"Los resultados llegan al cuadro {resultados.ultimo_cuadro + 1}, "
-            f"pero el video tiene {total_cuadros} cuadros. ¿Son del mismo video?",
-        )
-    panel_correcciones.cargar(eventos_desde_resultados(nuevos))
-    actualizar_alertas()
-    mostrar_cuadro()
 
 
 def _cargar_configuracion_lineas():
@@ -764,17 +736,17 @@ def main():
 
     footer = tk.Frame(derecha, bg=PANEL)
     footer.pack(fill="x", side="bottom", padx=15, pady=14,
-                before=panel_scrolling)            # <<< CAMBIADO
+                before=panel_scrolling)
     _boton(footer, "Ir a alerta seleccionada  ↗", ir_a_alerta,
            compacto=True).pack(fill="x")
-    _etiqueta(footer, "Resultados del tracker · Correcciones editables",   # <<< CAMBIADO (opcional)
+    _etiqueta(footer, "Resultados del tracker · Correcciones editables",
               MUTED, (UI, 8)).pack(pady=(9, 0))
     estado_lineas = _etiqueta(footer, "", AMBER, (MONO, 8),
                              wraplength=300, justify="center")
     estado_lineas.pack(pady=(5, 0))
     _cargar_configuracion_lineas()
 
-    panel_correcciones = PanelCorrecciones(        # <<< NUEVO (todo este bloque)
+    panel_correcciones = PanelCorrecciones(
         derecha,
         obtener_canal=canal_elegido,
         obtener_cuadro=lambda: cuadro_actual,
@@ -786,7 +758,7 @@ def main():
                             before=panel_scrolling)
 
     ventana.bind("<KeyPress>", _tecla)
-    ventana.bind("<Control-z>", lambda e: panel_correcciones.deshacer())   # <<< NUEVO
+    ventana.bind("<Control-z>", lambda e: panel_correcciones.deshacer())
     ventana.protocol("WM_DELETE_WINDOW", _cerrar)
     _construir_tarjetas()
     _dibujar_timeline()

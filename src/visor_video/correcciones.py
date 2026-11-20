@@ -1,24 +1,4 @@
-"""Correcciones manuales del conteo (sin interfaz gráfica, fácil de probar).
-
-Estructura (Tarea 1 de la semana 2):
-
-- EventoConteo: un conteo de un pez en un canal y un cuadro.
-    id        número único dentro del registro (no se reutiliza nunca)
-    canal     "1" o "2"
-    cuadro    índice base 0 (la interfaz lo muestra base 1)
-    id_pez    id de seguimiento del Tracker; None si lo agregó una persona
-    origen    "tracker" | "manual"
-
-- Operacion: una línea del historial. Guarda el evento ANTES y DESPUÉS, de
-  modo que cualquier operación se puede revertir y auditar.
-    tipo      AGREGAR | ELIMINAR | MOVER | DESHACER
-    revierte  en un DESHACER, número de la operación que se revirtió
-
-- RegistroCorrecciones: contiene los eventos originales (intactos), los
-  eventos actuales, el historial completo y la pila de deshacer.
-
-El original nunca se modifica: los cambios viven en el registro.
-"""
+"""Registro de correcciones manuales de conteo."""
 
 from __future__ import annotations
 
@@ -76,9 +56,8 @@ class RegistroCorrecciones:
             raise ErrorCorreccion("Hay eventos de conteo con id repetido.")
         self._siguiente_id = max(self._actuales, default=0) + 1
         self._operaciones: list[Operacion] = []
-        self._pila: list[int] = []  # índices en _operaciones que se pueden deshacer
+        self._pila: list[int] = []
 
-    # ---------- consulta ----------
     @property
     def original(self):
         return self._original
@@ -117,7 +96,6 @@ class RegistroCorrecciones:
     def total(self):
         return len(self._actuales)
 
-    # ---------- validación ----------
     def _validar(self, canal, cuadro):
         canal = str(canal).strip()
         if canal not in self.canales:
@@ -134,7 +112,6 @@ class RegistroCorrecciones:
             )
         return canal, cuadro
 
-    # ---------- operaciones ----------
     def _registrar(self, tipo, antes, despues, revierte=None):
         evento_id = (despues or antes).id
         if despues is None:
