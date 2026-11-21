@@ -18,12 +18,18 @@ try:
     from .correcciones import eventos_desde_resultados
     from .panel_correcciones import PanelCorrecciones
     from .persistencia import ErrorPersistencia, cargar_proyecto, guardar_proyecto
+    from .login import VentanaLogin
+    from .database import obtener_usuario
+    from . import sesion
 except ImportError:
     from resultados import ErrorResultados, cargar_varios, etiqueta_canal
     from alertas import MotorAlertas, cargar_lineas_conteo
     from correcciones import eventos_desde_resultados
     from panel_correcciones import PanelCorrecciones
     from persistencia import ErrorPersistencia, cargar_proyecto, guardar_proyecto
+    from login import VentanaLogin
+    from database import obtener_usuario
+    import sesion
 
 
 BG = "#181A1F"
@@ -65,6 +71,7 @@ canvas_alertas = None
 boton_play = None
 estado_visor = None
 estado_lineas = None
+usuario_actual = None
 
 panel_correcciones = None
 
@@ -797,11 +804,13 @@ def _cerrar():
     ventana.destroy()
 
 
-def main():
+def main(nombre_usuario=None):
     global ventana, visor, texto_cuadro, texto_tiempo, texto_alertas
     global menu_canal, texto_video, texto_csv, timeline, boton_play
     global panel_tarjetas, canvas_alertas, estado_visor, estado_lineas
-    global panel_correcciones
+    global panel_correcciones, usuario_actual
+
+    usuario_actual = nombre_usuario
 
     ventana = tk.Tk()
     ventana.title("Visor de Auditoría - Tracker Salmones")
@@ -969,6 +978,7 @@ def main():
         ir_a_frame=ir_a_frame,
         al_cambiar=actualizar_desde_correcciones,
         canales=TUBOS,
+        usuario_id=sesion.usuario_id,
     )
     panel_correcciones.pack(fill="x", side="bottom", padx=15, pady=(0, 6),
                             before=panel_scrolling)
@@ -982,4 +992,23 @@ def main():
     ventana.mainloop()
 
 if __name__ == "__main__":
-    main()
+    raiz = tk.Tk()
+
+    def iniciar_sesion(nombre_usuario):
+        usuario = obtener_usuario(nombre_usuario)
+
+        if usuario is None:
+            return
+
+        sesion.usuario_id = usuario[0]
+        sesion.nombre_usuario = usuario[1]
+
+        raiz.destroy()
+        main(nombre_usuario)
+
+    VentanaLogin(
+        raiz,
+        iniciar_sesion,
+    )
+
+    raiz.mainloop()

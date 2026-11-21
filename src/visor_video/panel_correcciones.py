@@ -8,9 +8,11 @@ from tkinter import messagebox, ttk
 try:
     from .correcciones import ErrorCorreccion, RegistroCorrecciones, ORIGEN_MANUAL
     from .persistencia import describir_operacion
+    from .database import guardar_correccion
 except ImportError:
     from correcciones import ErrorCorreccion, RegistroCorrecciones, ORIGEN_MANUAL
     from persistencia import describir_operacion
+    from database import guardar_correccion
 
 BG = "#181A1F"
 PANEL = "#21252B"
@@ -95,7 +97,7 @@ class _DialogoEvento(tk.Toplevel):
 
 class PanelCorrecciones(tk.Frame):
     def __init__(self, padre, obtener_canal, obtener_cuadro, obtener_total,
-                 ir_a_frame, al_cambiar=None, canales=("1", "2")):
+                 ir_a_frame, al_cambiar=None, canales=("1", "2"), usuario_id=None):
         super().__init__(padre, bg=PANEL)
         self._obtener_canal = obtener_canal
         self._obtener_cuadro = obtener_cuadro
@@ -103,6 +105,7 @@ class PanelCorrecciones(tk.Frame):
         self._ir_a_frame = ir_a_frame
         self._al_cambiar = al_cambiar
         self._canales = tuple(canales)
+        self._usuario_id = usuario_id
         self.registro: RegistroCorrecciones | None = None
         self._ids: list[int] = []
 
@@ -220,6 +223,23 @@ class PanelCorrecciones(tk.Frame):
                                 "Elige un conteo de la lista primero.")
             return None
         return self._ids[seleccion[0]]
+    
+    def _guardar_operacion(self, operacion):
+        if self._usuario_id is None or operacion is None:
+            return
+
+        evento = operacion.despues or operacion.antes
+
+        if evento is None:
+            return
+
+        guardar_correccion(
+            usuario_id=self._usuario_id,
+            tipo_correccion=operacion.tipo,
+            canal=evento.canal,
+            cuadro=evento.cuadro,
+            id_pez=evento.id_pez,
+        )
 
     def _hay_registro(self):
         if self.registro is None:
@@ -249,6 +269,10 @@ class PanelCorrecciones(tk.Frame):
         except ErrorCorreccion as exc:
             messagebox.showerror("No se pudo agregar", str(exc))
             return
+
+        operacion = self.registro.historial[-1]
+        self._guardar_operacion(operacion)
+
         self.refrescar(seleccionar=nuevo.id)
 
     def eliminar(self):
@@ -262,6 +286,10 @@ class PanelCorrecciones(tk.Frame):
         except ErrorCorreccion as exc:
             messagebox.showerror("No se pudo eliminar", str(exc))
             return
+
+        operacion = self.registro.historial[-1]
+        self._guardar_operacion(operacion)
+
         self.refrescar()
 
     def mover(self):
@@ -281,10 +309,19 @@ class PanelCorrecciones(tk.Frame):
         except ErrorCorreccion as exc:
             messagebox.showerror("No se pudo mover", str(exc))
             return
-        self.refrescar(seleccionar=evento_id)
 
+        operacion = self.registro.historial[-1]
+        self._guardar_operacion(operacion)
+
+        self.refrescar(seleccionar=evento_id)
+        
     def deshacer(self, _evento=None):
         if self.registro is None or not self.registro.puede_deshacer:
             return
+
         op = self.registro.deshacer()
+
+        if op is not None:
+            self._guardar_operacion(op)
+
         self.refrescar(seleccionar=op.evento_id if op else None)
