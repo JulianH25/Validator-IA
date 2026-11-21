@@ -991,7 +991,7 @@ def main(nombre_usuario=None):
     _dibujar_timeline()
     ventana.mainloop()
 
-if __name__ == "__main__":
+def start():
     raiz = tk.Tk()
 
     def iniciar_sesion(nombre_usuario):
@@ -1012,3 +1012,7 @@ if __name__ == "__main__":
     )
 
     raiz.mainloop()
+
+
+if __name__ == "__main__":
+    start()

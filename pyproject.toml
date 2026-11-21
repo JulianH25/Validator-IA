@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-start = "visor_video.visor_video:main"
+start = "visor_video.visor_video:start"
 
 
 [build-system]
