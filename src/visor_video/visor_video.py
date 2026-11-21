@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from dataclasses import replace
 
 import cv2
 from PIL import Image, ImageTk
@@ -79,6 +80,10 @@ reproduccion_after = None
 fps_video = 30.0
 ultima_dimension = (0, 0)
 
+def actualizar_desde_correcciones():
+    """Refresca la vista después de una corrección de conteo."""
+    actualizar_alertas()
+    mostrar_cuadro()
 
 def _boton(padre, texto, accion, principal=False, compacto=False):
     bg = BLUE if principal else PANEL_ALT
@@ -338,16 +343,104 @@ def _actualizar_estado_lineas():
                  f"T{t} y={lineas[str(t)]:g}" for t in TUBOS))
     estado_lineas.configure(text=texto, fg=AMBER if sin_linea else GREEN)
 
+def _detecciones_con_correcciones():
+    """
+    Devuelve las detecciones que debe utilizar el motor de alertas
+    respetando el estado actual del RegistroCorrecciones.
+
+    No modifica resultados.detecciones.
+    """
+    if resultados is None:
+        return []
+
+    registro = (
+        panel_correcciones.registro
+        if panel_correcciones is not None
+        else None
+    )
+
+    if registro is None:
+        return list(resultados.detecciones)
+
+    # Cantidad de eventos de conteo activos por
+    # (canal, cuadro, id_pez).
+    eventos_activos = {}
+
+    for evento in registro.eventos():
+        clave = (
+            str(evento.canal),
+            int(evento.cuadro),
+            str(evento.id_pez),
+        )
+        eventos_activos[clave] = eventos_activos.get(clave, 0) + 1
+
+    # Claves que originalmente eran eventos de conteo.
+    eventos_originales = {}
+
+    for evento in registro.original:
+        clave = (
+            str(evento.canal),
+            int(evento.cuadro),
+            str(evento.id_pez),
+        )
+        eventos_originales[clave] = eventos_originales.get(clave, 0) + 1
+
+    detecciones = []
+
+    for deteccion in resultados.detecciones:
+        # Solo necesitamos intervenir en las detecciones
+        # que originalmente estaban marcadas como contadas.
+        if not deteccion.contado:
+            detecciones.append(deteccion)
+            continue
+
+        clave = (
+            str(deteccion.canal),
+            int(deteccion.cuadro),
+            str(deteccion.id_pez),
+        )
+
+        if clave not in eventos_originales:
+            detecciones.append(deteccion)
+            continue
+
+        # Si todavía existe un evento de conteo en esta posición,
+        # conservamos la detección como contada.
+        restantes = eventos_activos.get(clave, 0)
+
+        if restantes > 0:
+            detecciones.append(
+                replace(deteccion, contado=True)
+            )
+            eventos_activos[clave] = restantes - 1
+        else:
+            # Fue eliminado o movido.
+            detecciones.append(
+                replace(deteccion, contado=False)
+            )
+
+    return detecciones
 
 def actualizar_alertas():
-    """Genera la lista de alertas a partir de las detecciones cargadas."""
+    """Genera las alertas respetando las correcciones actuales."""
     global alertas_detectadas, alerta_seleccionada
-    alertas_detectadas = (motor_alertas.analizar(resultados.detecciones)
-                         if resultados is not None else [])
+
+    detecciones = _detecciones_con_correcciones()
+
+    alertas_detectadas = (
+        motor_alertas.analizar(detecciones)
+        if resultados is not None
+        else []
+    )
+
     alerta_seleccionada = None
 
     if texto_alertas is not None:
-        texto_alertas.configure(text=f"{len(alertas_detectadas)} ALERTA{'S' if len(alertas_detectadas) != 1 else ''}")
+        texto_alertas.configure(
+            text=f"{len(alertas_detectadas)} ALERTA"
+                 f"{'S' if len(alertas_detectadas) != 1 else ''}"
+        )
+
     _construir_tarjetas()
     _dibujar_timeline()
 
@@ -874,6 +967,7 @@ def main():
         obtener_cuadro=lambda: cuadro_actual,
         obtener_total=lambda: total_cuadros,
         ir_a_frame=ir_a_frame,
+        al_cambiar=actualizar_desde_correcciones,
         canales=TUBOS,
     )
     panel_correcciones.pack(fill="x", side="bottom", padx=15, pady=(0, 6),
@@ -886,7 +980,6 @@ def main():
     _construir_tarjetas()
     _dibujar_timeline()
     ventana.mainloop()
-
 
 if __name__ == "__main__":
     main()
