@@ -1,12 +1,9 @@
-
 import os
 import tempfile
-
-import numpy as np
 import pytest
 
 from visor_video.resultados import (
-    ErrorResultados, cargar_csv, dibujar_cajas, etiqueta_canal,
+    ErrorResultados, cargar_csv, etiqueta_canal,
 )
 
 
@@ -63,12 +60,3 @@ def test_archivo_sin_filas_o_inexistente():
 def test_etiquetas():
     assert etiqueta_canal("2") == "Tubo 2"
     assert etiqueta_canal("Norte") == "Norte"
-
-
-def test_dibujar_solo_las_cajas_dadas_y_no_modifica_original():
-    r = cargar_csv(escribir(BASE))
-    cuadro = np.zeros((300, 400, 3), dtype=np.uint8)
-    salida = dibujar_cajas(cuadro, r.en_cuadro(0, "2"))
-    assert cuadro.sum() == 0                       # original intacto
-    assert salida[100:141, 10:51].sum() > 0        # caja del tubo 2 dibujada
-    assert salida[10:41, 10:51].sum() == 0         # caja del tubo 1 ausente

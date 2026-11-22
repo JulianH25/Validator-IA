@@ -168,7 +168,7 @@ class PanelCorrecciones(tk.Frame):
         self.registro = registro
         self.refrescar()
 
-    def refrescar(self, seleccionar=None):
+    def refrescar(self, seleccionar=None, notificar=True):
         self._lista.delete(0, "end")
         self._ids = []
         if self.registro is None:
@@ -186,11 +186,14 @@ class PanelCorrecciones(tk.Frame):
             self._lista.selection_set(fila)
             self._lista.see(fila)
         c = self.registro.conteos()
-        texto = "  ".join(f"T{k}:{v}" for k, v in c.items()) + f"  Total:{self.registro.total}"
+        if canal is None:
+            texto = "  ".join(f"T{k}:{v}" for k, v in c.items()) + f"  Total:{self.registro.total}"
+        else:
+            texto = f"Tubo {canal}: {c.get(canal, 0)}"
         self._conteos.configure(text=texto, fg=AMBER if self.registro.hay_cambios else WHITE)
         self._btn_deshacer.configure(
             state="normal" if self.registro.puede_deshacer else "disabled")
-        if self._al_cambiar:
+        if notificar and self._al_cambiar:
             self._al_cambiar()
 
 
@@ -223,23 +226,26 @@ class PanelCorrecciones(tk.Frame):
                                 "Elige un conteo de la lista primero.")
             return None
         return self._ids[seleccion[0]]
-    
+
     def _guardar_operacion(self, operacion):
         if self._usuario_id is None or operacion is None:
             return
-
         evento = operacion.despues or operacion.antes
-
         if evento is None:
             return
-
-        guardar_correccion(
-            usuario_id=self._usuario_id,
-            tipo_correccion=operacion.tipo,
-            canal=evento.canal,
-            cuadro=evento.cuadro,
-            id_pez=evento.id_pez,
-        )
+        try:
+            guardar_correccion(
+                usuario_id=self._usuario_id,
+                tipo_correccion=operacion.tipo,
+                canal=evento.canal,
+                cuadro=evento.cuadro,
+                id_pez=evento.id_pez,
+            )
+        except Exception as exc:
+            messagebox.showwarning(
+                "Historial",
+                f"La corrección se aplicó, pero no se pudo guardar en el historial local.\n\n{exc}",
+            )
 
     def _hay_registro(self):
         if self.registro is None:

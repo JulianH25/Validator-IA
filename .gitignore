@@ -49,3 +49,5 @@ salidas/
 *.zip
 *.rar
 *.7z
+
+*.db

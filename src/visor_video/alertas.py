@@ -1,7 +1,5 @@
 """Alertas sobre detecciones de salmones que descienden por dos tubos."""
 from collections import defaultdict
-import json
-from pathlib import Path
 from dataclasses import dataclass, field
 from itertools import combinations
 from math import hypot
@@ -320,22 +318,4 @@ class MotorAlertas:
         return alertas
 
 
-def cargar_lineas_conteo(ruta):
-    ruta = Path(ruta)
-    if not ruta.exists():
-        return {}
-    with ruta.open(encoding="utf-8") as archivo:
-        config = json.load(archivo)
-    lineas = config.get("lineas_conteo_y_px")
-    if not isinstance(lineas, dict):
-        raise ValueError("Se esperaba 'lineas_conteo_y_px' como objeto.")
-    resultado = {}
-    for tubo in ("1", "2"):
-        valor = lineas.get(tubo)
-        if valor is None:
-            continue
-        if (isinstance(valor, bool) or not isinstance(valor, (int, float))
-                or not 0 <= valor < float("inf")):
-            raise ValueError(f"La línea del tubo {tubo} debe ser un número en píxeles.")
-        resultado[tubo] = float(valor)
-    return resultado
+

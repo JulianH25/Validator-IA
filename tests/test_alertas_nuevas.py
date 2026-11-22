@@ -1,8 +1,4 @@
-import json
-
-import pytest
-
-from visor_video.alertas import ConfiguracionAlertas, MotorAlertas, cargar_lineas_conteo
+from visor_video.alertas import ConfiguracionAlertas, MotorAlertas
 from visor_video.resultados import Deteccion
 from visor_video.visor_video import _titulo_alerta
 
@@ -62,18 +58,6 @@ def test_lineas_se_aplican_a_cada_tubo_independientemente():
     bajo = [a for a in alertas if a.tipo == "INICIO_BAJO_LINEA"]
     assert len(bajo) == 1 and bajo[0].canal == "2"
 
-
-def test_lee_configuracion_nula_y_numerica(tmp_path):
-    ruta = tmp_path / "lineas_conteo.json"
-    ruta.write_text(json.dumps({"lineas_conteo_y_px": {"1": None, "2": 250}}), encoding="utf-8")
-    assert cargar_lineas_conteo(ruta) == {"2": 250.0}
-
-
-def test_rechaza_configuracion_invalida(tmp_path):
-    ruta = tmp_path / "lineas_conteo.json"
-    ruta.write_text(json.dumps({"lineas_conteo_y_px": {"1": -20}}), encoding="utf-8")
-    with pytest.raises(ValueError):
-        cargar_lineas_conteo(ruta)
 
 
 def test_titulos_nuevos_visibles_en_panel():

@@ -1,7 +1,7 @@
 """Guardado y recuperación de proyectos del Validator."""
 
 from __future__ import annotations
-
+import csv
 from dataclasses import dataclass
 from datetime import datetime
 import json
@@ -26,6 +26,7 @@ class ProyectoCargado:
     filtro: str
     lineas_conteo: dict[str, float]
     registro: RegistroCorrecciones
+    canales_archivo: str | None = None
 
 
 def _evento_a_dict(evento: EventoConteo | None):
@@ -134,6 +135,7 @@ def guardar_proyecto(
     cuadro=0,
     filtro="Todos (T1 + T2)",
     lineas_conteo=None,
+    canales_archivo=None
 ):
     if registro is None:
         raise ErrorPersistencia("No hay resultados ni correcciones para guardar.")
@@ -150,6 +152,7 @@ def guardar_proyecto(
         "filtro": str(filtro),
         "lineas_conteo": {str(k): float(v) for k, v in (lineas_conteo or {}).items()},
         "correcciones": registro_a_dict(registro),
+        "canales_archivo": str(Path(canales_archivo).resolve()) if canales_archivo else None,
     }
 
     temporal = destino.with_suffix(destino.suffix + ".tmp")
@@ -186,6 +189,7 @@ def cargar_proyecto(ruta):
             filtro=str(datos.get("filtro", "Todos (T1 + T2)")),
             lineas_conteo={str(k): float(v) for k, v in datos.get("lineas_conteo", {}).items()},
             registro=registro_desde_dict(datos["correcciones"]),
+            canales_archivo=datos.get("canales_archivo"),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ErrorPersistencia("El archivo de proyecto está incompleto.") from exc
@@ -204,3 +208,23 @@ def describir_operacion(op: Operacion):
         return f"{hora}  Deshacer operación #{op.revierte}  {ubicacion}".strip()
     nombres = {"AGREGAR": "Agregar", "ELIMINAR": "Eliminar"}
     return f"{hora}  {nombres.get(op.tipo, op.tipo.title())}  {ubicacion}".strip()
+
+def exportar_conteo_csv(ruta, registro, fps=None):
+    """Escribe el conteo final (con correcciones) en un CSV, un evento por fila.
+
+    `frame` usa base 0, igual que el CSV del Tracker. `tiempo_s` se calcula solo si se da `fps`.
+    """
+    if registro is None:
+        raise ErrorPersistencia("No hay conteos para exportar.")
+    destino = Path(ruta)
+    try:
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        with open(destino, "w", newline="", encoding="utf-8-sig") as archivo:
+            escritor = csv.writer(archivo)
+            escritor.writerow(["canal", "frame", "tiempo_s", "id_pez", "origen"])
+            for e in registro.eventos():
+                tiempo = f"{e.cuadro / fps:.3f}" if fps else ""
+                escritor.writerow([e.canal, e.cuadro, tiempo, e.id_pez or "", e.origen])
+    except OSError as exc:
+        raise ErrorPersistencia(f"No se pudo exportar el conteo: {exc}") from exc
+    return destino

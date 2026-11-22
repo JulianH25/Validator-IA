@@ -8,25 +8,28 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from dataclasses import replace
+from collections import Counter
 
 import cv2
 from PIL import Image, ImageTk
 
 try:
-    from .resultados import ErrorResultados, cargar_varios, etiqueta_canal
-    from .alertas import MotorAlertas, cargar_lineas_conteo
+    from .resultados import ErrorResultados, cargar_varios
+    from .alertas import MotorAlertas
+    from .canales import ErrorCanales, cargar_canales
     from .correcciones import eventos_desde_resultados
     from .panel_correcciones import PanelCorrecciones
-    from .persistencia import ErrorPersistencia, cargar_proyecto, guardar_proyecto
+    from .persistencia import ErrorPersistencia, cargar_proyecto, exportar_conteo_csv, guardar_proyecto
     from .login import VentanaLogin
     from .database import obtener_usuario
     from . import sesion
 except ImportError:
-    from resultados import ErrorResultados, cargar_varios, etiqueta_canal
-    from alertas import MotorAlertas, cargar_lineas_conteo
+    from resultados import ErrorResultados, cargar_varios
+    from alertas import MotorAlertas
+    from canales import ErrorCanales, cargar_canales
     from correcciones import eventos_desde_resultados
     from panel_correcciones import PanelCorrecciones
-    from persistencia import ErrorPersistencia, cargar_proyecto, guardar_proyecto
+    from persistencia import ErrorPersistencia, cargar_proyecto, exportar_conteo_csv, guardar_proyecto
     from login import VentanaLogin
     from database import obtener_usuario
     import sesion
@@ -55,7 +58,12 @@ total_cuadros = 0
 resultados = None
 etiqueta_a_canal = {}
 alertas_detectadas = []
+todas_las_alertas = []
 motor_alertas = MotorAlertas()
+
+# Canales (recuadro y línea de conteo de cada tubo) que entrega el Tracker.
+canales_actuales = {}
+ruta_canales_actual = None
 
 ventana = None
 visor = None
@@ -87,10 +95,12 @@ reproduccion_after = None
 fps_video = 30.0
 ultima_dimension = (0, 0)
 
+
 def actualizar_desde_correcciones():
     """Refresca la vista después de una corrección de conteo."""
     actualizar_alertas()
     mostrar_cuadro()
+
 
 def _boton(padre, texto, accion, principal=False, compacto=False):
     bg = BLUE if principal else PANEL_ALT
@@ -160,6 +170,7 @@ def _canales_no_admitidos(canales):
     """Identifica valores que no son Tubo 1 ni Tubo 2, sin perder datos."""
     return [str(canal) for canal in canales if str(canal) not in TUBOS]
 
+
 def _preguntar_tubo(ruta):
     """Se usa cuando un archivo no trae canal ni lo dice el nombre."""
     respuesta = messagebox.askyesnocancel(
@@ -203,7 +214,6 @@ def _cargar_resultados_desde_rutas(rutas, canales_guardados=None, registro_resta
         )
         return False
 
-    _cargar_configuracion_lineas()
     resultados = nuevos
     rutas_csv_actuales = rutas
     canales_csv_actuales = dict(guardados)
@@ -241,6 +251,78 @@ def cargar_resultados():
         _cargar_resultados_desde_rutas(rutas)
 
 
+# ---------------------------------------------------------------- canales
+
+def _aplicar_canales():
+    """La línea de conteo de cada tubo sale de los canales que entrega el Tracker."""
+    motor_alertas.config.lineas_conteo_y_px = {
+        c: ch.linea_y for c, ch in canales_actuales.items()
+    }
+    _actualizar_estado_lineas()
+
+
+def _cargar_canales_desde_ruta(ruta):
+    global canales_actuales, ruta_canales_actual
+    try:
+        nuevos = cargar_canales(ruta)
+    except ErrorCanales as exc:
+        messagebox.showerror("No se pudieron cargar los canales", str(exc))
+        return False
+    ajenos = [c for c in nuevos if c not in TUBOS]
+    if ajenos:
+        messagebox.showerror(
+            "Canales incompatibles",
+            "Este visor solo admite Tubo 1 y Tubo 2. Canales encontrados: "
+            + ", ".join(ajenos) + ".",
+        )
+        return False
+    canales_actuales = nuevos
+    ruta_canales_actual = str(Path(ruta).resolve())
+    _aplicar_canales()
+    actualizar_alertas()
+    mostrar_cuadro()
+    return True
+
+
+def cargar_canales_tracker():
+    ruta = filedialog.askopenfilename(
+        filetypes=[("Canales del Tracker", "*.json"), ("Todos", "*.*")]
+    )
+    if ruta:
+        _cargar_canales_desde_ruta(ruta)
+
+
+def _actualizar_estado_lineas():
+    if estado_lineas is None:
+        return
+    lineas = motor_alertas.config.lineas_conteo_y_px
+    if not lineas:
+        estado_lineas.configure(
+            text="SIN CANALES DEL TRACKER · alerta de línea desactivada", fg=AMBER)
+        return
+    sin_linea = [t for t in TUBOS if t not in lineas]
+    texto = ("CANALES SIN DEFINIR: " + ", ".join("T" + t for t in sin_linea)
+             if sin_linea else "LÍNEAS DEL TRACKER: " + ", ".join(
+                 f"T{t} y={lineas[t]:g}" for t in TUBOS))
+    estado_lineas.configure(text=texto, fg=AMBER if sin_linea else GREEN)
+
+
+def _dibujar_canales(cuadro):
+    """Recuadro de cada tubo y su línea de conteo, tal como los define el Tracker."""
+    activo = canal_elegido()
+    for id_canal, ch in canales_actuales.items():
+        if activo is not None and id_canal != activo:
+            continue
+        cv2.rectangle(cuadro, (int(ch.x1), int(ch.y1)), (int(ch.x2), int(ch.y2)),
+                      (230, 200, 60), 1)
+        y = int(ch.linea_y)
+        cv2.line(cuadro, (int(ch.x1), y), (int(ch.x2), y), (0, 215, 255), 2)
+        cv2.putText(cuadro, f"T{id_canal}", (int(ch.x1) + 4, int(ch.y1) + 18),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (230, 200, 60), 1, cv2.LINE_AA)
+    return cuadro
+
+
+# ---------------------------------------------------------------- proyecto
 
 def guardar_proyecto_actual():
     global ruta_proyecto_actual
@@ -267,6 +349,7 @@ def guardar_proyecto_actual():
             cuadro=cuadro_actual,
             filtro=menu_canal.get() if menu_canal is not None else TODOS,
             lineas_conteo=motor_alertas.config.lineas_conteo_y_px,
+            canales_archivo=ruta_canales_actual,
         )
     except ErrorPersistencia as exc:
         messagebox.showerror("No se pudo guardar", str(exc))
@@ -274,9 +357,30 @@ def guardar_proyecto_actual():
     ruta_proyecto_actual = str(Path(ruta).resolve())
     messagebox.showinfo("Proyecto guardado", "Las correcciones y el historial quedaron guardados.")
 
+def exportar_conteo():
+    if panel_correcciones is None or panel_correcciones.registro is None:
+        messagebox.showinfo("Sin resultados", "Carga los resultados antes de exportar el conteo.")
+        return
+    registro = panel_correcciones.registro
+    ruta = filedialog.asksaveasfilename(
+        defaultextension=".csv",
+        filetypes=[("CSV", "*.csv")],
+        initialfile="conteo_final.csv",
+    )
+    if not ruta:
+        return
+    try:
+        exportar_conteo_csv(ruta, registro, fps=fps_video)
+    except ErrorPersistencia as exc:
+        messagebox.showerror("No se pudo exportar", str(exc))
+        return
+    conteos = registro.conteos()
+    detalle = "\n".join(f"Tubo {c}: {n}" for c, n in conteos.items())
+    messagebox.showinfo("Conteo exportado", f"{detalle}\nTotal: {registro.total}")
 
 def abrir_proyecto_guardado():
     global resultados, etiqueta_a_canal, alerta_seleccionada, ruta_proyecto_actual
+    global canales_actuales, ruta_canales_actual
     ruta = filedialog.askopenfilename(
         filetypes=[("Proyecto Validator", "*.validator.json"), ("JSON", "*.json")]
     )
@@ -303,6 +407,8 @@ def abrir_proyecto_guardado():
     resultados = None
     etiqueta_a_canal = {}
     alerta_seleccionada = None
+    canales_actuales = {}
+    ruta_canales_actual = None
     if panel_correcciones is not None:
         panel_correcciones.limpiar()
 
@@ -316,9 +422,14 @@ def abrir_proyecto_guardado():
     if not proyecto.csvs and panel_correcciones is not None:
         panel_correcciones.cargar_registro(proyecto.registro)
 
-    motor_alertas.config.lineas_conteo_y_px = dict(proyecto.lineas_conteo)
-    _actualizar_estado_lineas()
-    actualizar_alertas()
+    if proyecto.canales_archivo and Path(proyecto.canales_archivo).exists():
+        _cargar_canales_desde_ruta(proyecto.canales_archivo)
+    else:
+        # Proyecto sin archivo de canales (o el archivo ya no está): se usan
+        # las líneas que quedaron guardadas en el proyecto.
+        motor_alertas.config.lineas_conteo_y_px = dict(proyecto.lineas_conteo)
+        _actualizar_estado_lineas()
+        actualizar_alertas()
 
     if menu_canal is not None and proyecto.filtro in FILTROS:
         menu_canal.set(proyecto.filtro)
@@ -329,127 +440,65 @@ def abrir_proyecto_guardado():
     ruta_proyecto_actual = str(Path(ruta).resolve())
 
 
-def _cargar_configuracion_lineas():
-    ruta = Path(__file__).with_name("lineas_conteo.json")
-    try:
-        motor_alertas.config.lineas_conteo_y_px = cargar_lineas_conteo(ruta)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        motor_alertas.config.lineas_conteo_y_px = {}
-        if ventana is not None:
-            messagebox.showwarning("Líneas de conteo", str(exc))
-    _actualizar_estado_lineas()
-
-
-def _actualizar_estado_lineas():
-    if estado_lineas is None:
-        return
-    lineas = motor_alertas.config.lineas_conteo_y_px
-    sin_linea = [t for t in TUBOS if t not in lineas]
-    texto = ("LÍNEAS SIN CONFIGURAR: " + ", ".join("T" + t for t in sin_linea)
-             if sin_linea else "LÍNEAS CONFIGURADAS: " + ", ".join(
-                 f"T{t} y={lineas[str(t)]:g}" for t in TUBOS))
-    estado_lineas.configure(text=texto, fg=AMBER if sin_linea else GREEN)
+# ---------------------------------------------------------------- alertas
 
 def _detecciones_con_correcciones():
-    """
-    Devuelve las detecciones que debe utilizar el motor de alertas
-    respetando el estado actual del RegistroCorrecciones.
+    """Detecciones para el motor de alertas, según el estado actual de las correcciones.
 
-    No modifica resultados.detecciones.
+    Una detección queda como contada si hay un evento de conteo vigente para su
+    (canal, cuadro, id_pez). No modifica resultados.detecciones.
+    Los conteos manuales no tienen id de pez, así que no generan alertas de duplicado.
     """
     if resultados is None:
         return []
 
-    registro = (
-        panel_correcciones.registro
-        if panel_correcciones is not None
-        else None
-    )
-
+    registro = panel_correcciones.registro if panel_correcciones is not None else None
     if registro is None:
         return list(resultados.detecciones)
 
-    # Cantidad de eventos de conteo activos por
-    # (canal, cuadro, id_pez).
-    eventos_activos = {}
-
-    for evento in registro.eventos():
-        clave = (
-            str(evento.canal),
-            int(evento.cuadro),
-            str(evento.id_pez),
-        )
-        eventos_activos[clave] = eventos_activos.get(clave, 0) + 1
-
-    # Claves que originalmente eran eventos de conteo.
-    eventos_originales = {}
-
-    for evento in registro.original:
-        clave = (
-            str(evento.canal),
-            int(evento.cuadro),
-            str(evento.id_pez),
-        )
-        eventos_originales[clave] = eventos_originales.get(clave, 0) + 1
-
-    detecciones = []
-
-    for deteccion in resultados.detecciones:
-        # Solo necesitamos intervenir en las detecciones
-        # que originalmente estaban marcadas como contadas.
-        if not deteccion.contado:
-            detecciones.append(deteccion)
-            continue
-
-        clave = (
-            str(deteccion.canal),
-            int(deteccion.cuadro),
-            str(deteccion.id_pez),
-        )
-
-        if clave not in eventos_originales:
-            detecciones.append(deteccion)
-            continue
-
-        # Si todavía existe un evento de conteo en esta posición,
-        # conservamos la detección como contada.
-        restantes = eventos_activos.get(clave, 0)
-
-        if restantes > 0:
-            detecciones.append(
-                replace(deteccion, contado=True)
-            )
-            eventos_activos[clave] = restantes - 1
-        else:
-            # Fue eliminado o movido.
-            detecciones.append(
-                replace(deteccion, contado=False)
-            )
-
-    return detecciones
-
-def actualizar_alertas():
-    """Genera las alertas respetando las correcciones actuales."""
-    global alertas_detectadas, alerta_seleccionada
-
-    detecciones = _detecciones_con_correcciones()
-
-    alertas_detectadas = (
-        motor_alertas.analizar(detecciones)
-        if resultados is not None
-        else []
+    activos = Counter(
+        (str(e.canal), int(e.cuadro), str(e.id_pez))
+        for e in registro.eventos()
+        if e.id_pez is not None
     )
 
-    alerta_seleccionada = None
+    detecciones = []
+    for d in resultados.detecciones:
+        clave = (str(d.canal), int(d.cuadro), str(d.id_pez))
+        if activos[clave] > 0:
+            activos[clave] -= 1
+            detecciones.append(d if d.contado else replace(d, contado=True))
+        else:
+            detecciones.append(replace(d, contado=False) if d.contado else d)
+    return detecciones
 
+
+def _filtrar_alertas():
+    """Muestra solo las alertas del tubo elegido (o todas con «Todos»)."""
+    global alertas_detectadas, alerta_seleccionada
+    canal = canal_elegido()
+    alertas_detectadas = [
+        a for a in todas_las_alertas if canal is None or str(a.canal) == canal
+    ]
+    alerta_seleccionada = None
     if texto_alertas is not None:
         texto_alertas.configure(
             text=f"{len(alertas_detectadas)} ALERTA"
                  f"{'S' if len(alertas_detectadas) != 1 else ''}"
         )
-
     _construir_tarjetas()
     _dibujar_timeline()
+
+
+def actualizar_alertas():
+    """Calcula las alertas con las correcciones actuales y aplica el filtro de tubo."""
+    global todas_las_alertas
+    todas_las_alertas = (
+        motor_alertas.analizar(_detecciones_con_correcciones())
+        if resultados is not None
+        else []
+    )
+    _filtrar_alertas()
 
 
 def ir_a_frame(cuadro):
@@ -475,7 +524,8 @@ def canal_elegido():
 
 def al_cambiar_canal(evento=None):
     if panel_correcciones is not None:
-        panel_correcciones.refrescar()
+        panel_correcciones.refrescar(notificar=False)
+    _filtrar_alertas()
     mostrar_cuadro()
 
 
@@ -555,6 +605,9 @@ def mostrar_cuadro():
     correcto, imagen_bgr = video.read()
     if not correcto:
         return
+
+    if canales_actuales:
+        imagen_bgr = _dibujar_canales(imagen_bgr)
 
     if resultados is not None:
         detecciones = resultados.en_cuadro(cuadro_actual, canal_elegido())
@@ -711,11 +764,13 @@ def _construir_tarjetas():
         vacio = tk.Frame(panel_tarjetas, bg=PANEL)
         vacio.pack(fill="both", expand=True, pady=45, padx=14)
         _etiqueta(vacio, "SIN ANOMALÍAS", MUTED, (UI, 11, "bold")).pack(pady=(8, 8))
-        sin_linea = [t for t in TUBOS if t not in motor_alertas.config.lineas_conteo_y_px]
-        texto = ("Carga un CSV para analizar los resultados." if resultados is None
-                 else "No se detectaron anomalías. Línea sin configurar en "
-                      + ", ".join("T" + t for t in sin_linea) + "." if sin_linea
-                 else "No se detectaron anomalías con los criterios actuales.")
+        if resultados is None:
+            texto = "Carga un CSV para analizar los resultados."
+        elif not motor_alertas.config.lineas_conteo_y_px:
+            texto = ("No se detectaron anomalías. Sin canales del Tracker: "
+                     "la alerta de línea está desactivada.")
+        else:
+            texto = "No se detectaron anomalías con los criterios actuales."
         _etiqueta(vacio, texto, MUTED, (UI, 9), wraplength=280,
                   justify="center").pack()
         return
@@ -818,8 +873,6 @@ def main(nombre_usuario=None):
     ventana.minsize(1050, 620)
     ventana.configure(bg=BG)
 
-    _cargar_configuracion_lineas()
-
     estilo = ttk.Style(ventana)
     estilo.theme_use("clam")
     estilo.configure("Audit.TCombobox", padding=7, fieldbackground=PANEL_ALT,
@@ -855,8 +908,10 @@ def main(nombre_usuario=None):
 
     _boton(barra, "Cargar video", cargar_video, compacto=True).pack(side="left", padx=(5, 6))
     _boton(barra, "Cargar CSV", cargar_resultados, compacto=True).pack(side="left", padx=(0, 6))
+    _boton(barra, "Canales", cargar_canales_tracker, compacto=True).pack(side="left", padx=(0, 6))
     _boton(barra, "Abrir proyecto", abrir_proyecto_guardado, compacto=True).pack(side="left", padx=(0, 6))
-    _boton(barra, "Guardar proyecto", guardar_proyecto_actual, compacto=True).pack(side="left", padx=(0, 14))
+    _boton(barra, "Guardar proyecto", guardar_proyecto_actual, compacto=True).pack(side="left", padx=(0, 6))
+    _boton(barra, "Exportar CSV", exportar_conteo, compacto=True).pack(side="left", padx=(0, 14))
 
     selector = tk.Frame(barra, bg=PANEL)
     selector.pack(side="right", padx=(4, 21), pady=10)
@@ -966,9 +1021,9 @@ def main(nombre_usuario=None):
     _etiqueta(footer, "Resultados del tracker · Correcciones editables",
               MUTED, (UI, 8)).pack(pady=(9, 0))
     estado_lineas = _etiqueta(footer, "", AMBER, (MONO, 8),
-                             wraplength=300, justify="center")
+                              wraplength=300, justify="center")
     estado_lineas.pack(pady=(5, 0))
-    _cargar_configuracion_lineas()
+    _actualizar_estado_lineas()
 
     panel_correcciones = PanelCorrecciones(
         derecha,
@@ -990,6 +1045,7 @@ def main(nombre_usuario=None):
     _construir_tarjetas()
     _dibujar_timeline()
     ventana.mainloop()
+
 
 def start():
     raiz = tk.Tk()

@@ -1,33 +1,8 @@
-"""Lectura y agrupación de detecciones de dos tubos con caída vertical.
-
-Formato esperado (CSV, una fila por pez detectado en un cuadro):
-
-    frame,track_id,x1,y1,x2,y2,canal
-    0,1,100,50,180,90,1
-    0,2,300,60,390,110,2
-
-- frame: número de cuadro, empezando en 0 (ver PRIMER_CUADRO).
-- track_id: identificador de seguimiento del pez.
-- x1,y1,x2,y2: caja en píxeles del video original (y aumenta hacia abajo).
-  Alternativa: x,y,w,h (esquina superior izquierda, ancho y alto).
-- canal: tubo al que pertenece (1 o 2 en el visor actual). Puede faltar si
-  el archivo es de un solo tubo (ver cargar_varios).
-- timestamp_ms (opcional): tiempo del evento en milisegundos.
-- contado (opcional): indica si la fila corresponde a un evento de conteo.
-
-El formato común con el Tracker aún no está acordado, por eso se aceptan
-varios nombres de columna (ver ALIAS) y los separadores "," ";" y tabulador.
-Si el formato final cambia, solo hay que tocar este archivo.
-"""
-
 import csv
 import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-
-
-import cv2
 
 # Cambiar a 1 si el tracker numera desde 1.
 PRIMER_CUADRO = 0
@@ -286,28 +261,4 @@ def cargar_varios(rutas, resolver_canal=None):
         detecciones.extend(parcial.detecciones)
     return Resultados(detecciones)
 
-
-def _color_de_id(id_pez):
-    """Color BGR estable para cada pez, para distinguirlos entre cuadros."""
-    semilla = sum(ord(c) for c in id_pez) * 47
-    return (60 + semilla % 196, 60 + (semilla // 3) % 196, 60 + (semilla // 7) % 196)
-
-
-def dibujar_cajas(cuadro, detecciones):
-    """Dibuja las cajas sobre una copia del cuadro (BGR) y la devuelve."""
-    salida = cuadro.copy()
-    grosor = max(2, salida.shape[1] // 400)
-    escala = max(0.6, salida.shape[1] / 1400)
-    for d in detecciones:
-        color = _color_de_id(d.id_pez)
-        cv2.rectangle(salida, (d.x1, d.y1), (d.x2, d.y2), color, grosor)
-        cv2.putText(
-            salida,
-            f"ID {d.id_pez}",
-            (d.x1, max(15, d.y1 - 6)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            escala,
-            color,
-            grosor,
-        )
     return salida
