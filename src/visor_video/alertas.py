@@ -21,10 +21,6 @@ class ConfiguracionAlertas:
     distancia_centros_max_px: float = 28.0
 
     max_cuadros_faltantes: int = 1
-    retroceso_vertical_min_px: float = 18.0
-
-    ventana_duplicado_ms: int = 100
-    ventana_duplicado_cuadros: int = 3
     lineas_conteo_y_px: dict[str, float] = field(default_factory=dict)
 
 
@@ -37,8 +33,6 @@ class MotorAlertas:
         alertas = []
         alertas.extend(self._detectar_peces_juntos(detecciones))
         alertas.extend(self._detectar_perdidas_seguimiento(detecciones))
-        alertas.extend(self._detectar_duplicados(detecciones))
-        alertas.extend(self._detectar_retroceso_vertical(detecciones))
         alertas.extend(self._detectar_aparicion_un_cuadro(detecciones))
         alertas.extend(self._detectar_inicio_bajo_linea(detecciones))
         return sorted(alertas, key=lambda a: (a.cuadro, a.tipo, str(a.canal)))
@@ -146,117 +140,6 @@ class MotorAlertas:
                             },
                         )
                     )
-        return alertas
-
-    def _detectar_retroceso_vertical(self, detecciones):
-        por_pez = defaultdict(lambda: defaultdict(list))
-        for d in detecciones:
-            por_pez[(d.canal, d.id_pez)][d.cuadro].append(d)
-
-        alertas = []
-        for (canal, id_pez), por_cuadro in por_pez.items():
-            cuadros = sorted(por_cuadro)
-            ultimo_evento = None
-            for anterior, actual in zip(cuadros, cuadros[1:]):
-                if actual - anterior != 1:
-                    ultimo_evento = None
-                    continue
-                y_anterior = sum((d.y1 + d.y2) / 2 for d in por_cuadro[anterior]) / len(por_cuadro[anterior])
-                y_actual = sum((d.y1 + d.y2) / 2 for d in por_cuadro[actual]) / len(por_cuadro[actual])
-                retroceso = y_anterior - y_actual
-                if retroceso < self.config.retroceso_vertical_min_px:
-                    ultimo_evento = None
-                    continue
-                if ultimo_evento == anterior:
-                    ultimo_evento = actual
-                    continue
-                alertas.append(
-                    Alerta(
-                        tipo="MOVIMIENTO_CONTRARIO",
-                        cuadro=actual,
-                        canal=canal,
-                        ids_pez=(id_pez,),
-                        mensaje=(f"Movimiento hacia arriba - cuadro {actual + 1} - "
-                                 f"Tubo {canal} - ID {id_pez}"),
-                        detalles={"retroceso_y_px": round(retroceso, 2)},
-                    )
-                )
-                ultimo_evento = actual
-        return alertas
-
-    def _detectar_duplicados(self, detecciones):
-        alertas = []
-
-        por_cuadro = defaultdict(list)
-        for d in detecciones:
-            por_cuadro[(d.canal, d.cuadro, d.id_pez)].append(d)
-
-        for (canal, cuadro, id_pez), grupo in por_cuadro.items():
-            if len(grupo) > 1:
-                alertas.append(
-                    Alerta(
-                        tipo="POSIBLE_DUPLICADO",
-                        cuadro=cuadro,
-                        canal=canal,
-                        ids_pez=(id_pez,),
-                        mensaje=(
-                            f"Posible duplicado - cuadro {cuadro + 1} - "
-                            f"Tubo {canal} - ID {id_pez}"
-                        ),
-                        detalles={"detecciones_mismo_cuadro": len(grupo)},
-                    )
-                )
-
-        eventos = defaultdict(list)
-        for d in detecciones:
-            if getattr(d, "contado", False):
-                eventos[(d.canal, d.id_pez)].append(d)
-
-        for (canal, id_pez), items in eventos.items():
-            items.sort(
-                key=lambda d: (
-                    getattr(d, "timestamp_ms", None)
-                    if getattr(d, "timestamp_ms", None) is not None
-                    else d.cuadro,
-                    d.cuadro,
-                )
-            )
-            for anterior, actual in zip(items, items[1:]):
-                t_anterior = getattr(anterior, "timestamp_ms", None)
-                t_actual = getattr(actual, "timestamp_ms", None)
-
-                if t_anterior is not None and t_actual is not None:
-                    delta = t_actual - t_anterior
-                    es_duplicado = 0 <= delta <= self.config.ventana_duplicado_ms
-                    detalle = {"delta_ms": delta}
-                else:
-                    delta_cuadros = actual.cuadro - anterior.cuadro
-                    es_duplicado = 0 <= delta_cuadros <= self.config.ventana_duplicado_cuadros
-                    detalle = {"delta_cuadros": delta_cuadros}
-
-                if es_duplicado:
-                    if any(
-                        a.tipo == "POSIBLE_DUPLICADO"
-                        and a.cuadro == actual.cuadro
-                        and a.canal == canal
-                        and a.ids_pez == (id_pez,)
-                        for a in alertas
-                    ):
-                        continue
-                    alertas.append(
-                        Alerta(
-                            tipo="POSIBLE_DUPLICADO",
-                            cuadro=actual.cuadro,
-                            canal=canal,
-                            ids_pez=(id_pez,),
-                            mensaje=(
-                                f"Posible duplicado - cuadro {actual.cuadro + 1} - "
-                                f"Tubo {canal} - ID {id_pez}"
-                            ),
-                            detalles=detalle,
-                        )
-                    )
-
         return alertas
 
     def _detectar_aparicion_un_cuadro(self, detecciones):
