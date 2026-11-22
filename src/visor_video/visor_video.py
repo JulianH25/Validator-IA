@@ -383,10 +383,8 @@ def _color_alerta(alerta):
     return {
         "PECES_JUNTOS": RED,
         "PERDIDA_SEGUIMIENTO": AMBER,
-        "POSIBLE_DUPLICADO": RED,
         "APARICION_UN_CUADRO": AMBER,
         "INICIO_BAJO_LINEA": RED,
-        "MOVIMIENTO_CONTRARIO": AMBER,
     }.get(alerta.tipo, RED)
 
 
@@ -394,10 +392,8 @@ def _titulo_alerta(alerta):
     return {
         "PECES_JUNTOS": "Peces muy juntos",
         "PERDIDA_SEGUIMIENTO": "Pérdida de seguimiento",
-        "POSIBLE_DUPLICADO": "Posible duplicado",
         "APARICION_UN_CUADRO": "ID en un solo frame",
         "INICIO_BAJO_LINEA": "Aparición bajo la línea",
-        "MOVIMIENTO_CONTRARIO": "Movimiento hacia arriba",
     }.get(alerta.tipo, alerta.tipo.replace("_", " ").title())
 
 

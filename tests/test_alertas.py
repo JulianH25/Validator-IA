@@ -33,22 +33,22 @@ def test_detecta_perdida_y_reaparicion():
     assert any(a.tipo == "PERDIDA_SEGUIMIENTO" and a.cuadro == 21 for a in alertas)
 
 
-def test_detecta_id_duplicado_en_mismo_cuadro():
+def test_no_emite_alerta_duplicado_en_mismo_cuadro():
     datos = [
         d(30, "A", 100, 100, 160, 140),
         d(30, "A", 102, 101, 162, 141),
     ]
     alertas = MotorAlertas().analizar(datos)
-    assert any(a.tipo == "POSIBLE_DUPLICADO" and a.cuadro == 30 for a in alertas)
+    assert not any(a.tipo == "POSIBLE_DUPLICADO" for a in alertas)
 
 
-def test_detecta_eventos_de_conteo_muy_cercanos():
+def test_no_emite_alerta_por_conteos_cercanos():
     datos = [
         d(40, "A", 100, 100, 160, 140, timestamp_ms=1000, contado=True),
         d(42, "A", 100, 110, 160, 150, timestamp_ms=1070, contado=True),
     ]
     alertas = MotorAlertas().analizar(datos)
-    assert any(a.tipo == "POSIBLE_DUPLICADO" and a.cuadro == 42 for a in alertas)
+    assert not any(a.tipo == "POSIBLE_DUPLICADO" for a in alertas)
 
 
 def test_no_repite_pareja_junta_en_cuadros_consecutivos():
@@ -75,7 +75,7 @@ def test_csv_acepta_tiempo_y_evento_de_conteo(tmp_path):
     r = cargar_csv(ruta)
     assert r.detecciones[0].timestamp_ms == 1000
     assert r.detecciones[0].contado is True
-    assert any(a.tipo == "POSIBLE_DUPLICADO" for a in MotorAlertas().analizar(r.detecciones))
+    assert not any(a.tipo == "POSIBLE_DUPLICADO" for a in MotorAlertas().analizar(r.detecciones))
 
 
 def test_ir_a_frame_actualiza_el_reproductor(monkeypatch):
