@@ -1,6 +1,5 @@
 from visor_video.alertas import ConfiguracionAlertas, MotorAlertas
 from visor_video.resultados import Deteccion
-from visor_video.visor_video import _titulo_alerta
 
 
 def pez(frame, identificador, y, canal="1", x=160):
@@ -21,18 +20,15 @@ def test_pequeno_ruido_vertical_es_tolerado():
     assert not any(a.tipo == "MOVIMIENTO_CONTRARIO" for a in tipos(datos))
 
 
-def test_retroceso_vertical_genera_alerta_en_cuadro_correcto():
+def test_retroceso_vertical_no_genera_alerta():
     datos = [pez(0, "101", 130), pez(1, "101", 145), pez(2, "101", 116), pez(3, "101", 126)]
     alertas = [a for a in tipos(datos) if a.tipo == "MOVIMIENTO_CONTRARIO"]
-    assert len(alertas) == 1
-    assert (alertas[0].cuadro, alertas[0].canal, alertas[0].ids_pez) == (2, "1", ("101",))
-    assert alertas[0].detalles["retroceso_y_px"] == 29
-    assert _titulo_alerta(alertas[0]) == "Movimiento hacia arriba"
+    assert alertas == []
 
 
 def test_ascensos_consecutivos_producen_una_sola_alerta():
     datos = [pez(0, "201", 170, "2"), pez(1, "201", 146, "2"), pez(2, "201", 122, "2")]
-    assert len([a for a in tipos(datos) if a.tipo == "MOVIMIENTO_CONTRARIO"]) == 1
+    assert not any(a.tipo == "MOVIMIENTO_CONTRARIO" for a in tipos(datos))
 
 
 def test_linea_no_es_alarma_por_cruce_normal_hacia_abajo():
