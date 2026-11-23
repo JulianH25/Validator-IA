@@ -169,9 +169,9 @@ class RegistroCorrecciones:
 def eventos_desde_resultados(resultados):
     """Eventos de conteo iniciales a partir de lo que entrega el Tracker.
 
-    - Si el CSV marca filas como contadas (columna `contado`), cada fila
-      contada es un evento (así un conteo duplicado se puede eliminar).
-    - Si el CSV no trae esa información, se cuenta un evento por pez, en
+    - Si el JSON marca detecciones como contadas (`contado`), cada detección
+      contada es un evento (así un conteo erróneo se puede eliminar).
+    - Si el JSON no trae esa información, se cuenta un evento por pez, en
       el último cuadro en que aparece. Ajustar aquí cuando se acuerde el
       formato común con el Tracker.
     """

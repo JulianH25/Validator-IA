@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import json
 import os
 from pathlib import Path
 import tkinter as tk
@@ -19,7 +20,7 @@ try:
     from .canales import ErrorCanales, cargar_canales
     from .correcciones import eventos_desde_resultados
     from .panel_correcciones import PanelCorrecciones
-    from .persistencia import ErrorPersistencia, cargar_proyecto, exportar_conteo_csv, guardar_proyecto
+    from .persistencia import ErrorPersistencia, cargar_proyecto, exportar_conteo_json, guardar_proyecto
     from .login import VentanaLogin
     from .database import obtener_usuario
     from . import sesion
@@ -29,7 +30,7 @@ except ImportError:
     from canales import ErrorCanales, cargar_canales
     from correcciones import eventos_desde_resultados
     from panel_correcciones import PanelCorrecciones
-    from persistencia import ErrorPersistencia, cargar_proyecto, exportar_conteo_csv, guardar_proyecto
+    from persistencia import ErrorPersistencia, cargar_proyecto, exportar_conteo_json, guardar_proyecto
     from login import VentanaLogin
     from database import obtener_usuario
     import sesion
@@ -72,7 +73,7 @@ texto_cuadro = None
 texto_tiempo = None
 texto_alertas = None
 texto_video = None
-texto_csv = None
+texto_configuracion = None
 timeline = None
 panel_tarjetas = None
 canvas_alertas = None
@@ -84,8 +85,8 @@ usuario_actual = None
 panel_correcciones = None
 
 ruta_video_actual = None
-rutas_csv_actuales = ()
-canales_csv_actuales = {}
+rutas_json_actuales = ()
+canales_json_actuales = {}
 ruta_proyecto_actual = None
 
 alerta_seleccionada = None
@@ -184,7 +185,7 @@ def _preguntar_tubo(ruta):
 
 
 def _cargar_resultados_desde_rutas(rutas, canales_guardados=None, registro_restaurado=None):
-    global resultados, etiqueta_a_canal, rutas_csv_actuales, canales_csv_actuales
+    global resultados, etiqueta_a_canal, rutas_json_actuales, canales_json_actuales
     rutas = tuple(str(Path(r).resolve()) for r in rutas)
     guardados = {str(Path(k).resolve()): str(v) for k, v in (canales_guardados or {}).items()}
     resueltos = {}
@@ -207,23 +208,23 @@ def _cargar_resultados_desde_rutas(rutas, canales_guardados=None, registro_resta
     no_admitidos = _canales_no_admitidos(nuevos.canales)
     if no_admitidos:
         messagebox.showerror(
-            "CSV incompatible",
+            "Configuración incompatible",
             "Este visor está configurado únicamente para Tubo 1 y Tubo 2.\n"
             "Canales encontrados fuera de ese rango: " + ", ".join(no_admitidos) + ".\n"
-            "Revisa el CSV o consulta con el responsable de los datos del tracker.",
+            "Revisa el JSON o consulta con el responsable de los datos del tracker.",
         )
         return False
 
     resultados = nuevos
-    rutas_csv_actuales = rutas
-    canales_csv_actuales = dict(guardados)
-    canales_csv_actuales.update(resueltos)
+    rutas_json_actuales = rutas
+    canales_json_actuales = dict(guardados)
+    canales_json_actuales.update(resueltos)
     etiqueta_a_canal = {nombre: canal for nombre, canal in FILTROS.items() if canal is not None}
     menu_canal.configure(values=list(FILTROS), state="readonly")
     menu_canal.set(TODOS)
-    if texto_csv is not None:
+    if texto_configuracion is not None:
         nombre = os.path.basename(rutas[0]) if len(rutas) == 1 else f"{len(rutas)} archivos"
-        texto_csv.configure(text=f"DATOS  {nombre[:31]}", fg=GREEN)
+        texto_configuracion.configure(text=f"DATOS  {nombre[:31]}", fg=GREEN)
 
     if total_cuadros and resultados.ultimo_cuadro >= total_cuadros:
         messagebox.showwarning(
@@ -245,10 +246,30 @@ def _cargar_resultados_desde_rutas(rutas, canales_guardados=None, registro_resta
 
 def cargar_resultados():
     rutas = filedialog.askopenfilenames(
-        filetypes=[("Resultados del tracker", "*.csv"), ("Todos", "*.*")]
+        filetypes=[("Configuración JSON del tracker", "*.json")]
     )
-    if rutas:
-        _cargar_resultados_desde_rutas(rutas)
+    if not rutas:
+        return
+    if len(rutas) == 1:
+        try:
+            datos = json.loads(Path(rutas[0]).read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            messagebox.showerror("Configuración inválida", str(exc))
+            return
+        if isinstance(datos, dict) and "canales" in datos and not any(
+            k in datos for k in ("detecciones", "resultados")
+        ):
+            _cargar_canales_desde_ruta(rutas[0])
+            return
+    if _cargar_resultados_desde_rutas(rutas):
+        for ruta in rutas:
+            try:
+                datos = json.loads(Path(ruta).read_text(encoding="utf-8-sig"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                continue
+            if isinstance(datos, dict) and "canales" in datos:
+                _cargar_canales_desde_ruta(ruta)
+                break
 
 
 # ---------------------------------------------------------------- canales
@@ -344,8 +365,8 @@ def guardar_proyecto_actual():
             ruta,
             panel_correcciones.registro,
             video=ruta_video_actual,
-            csvs=rutas_csv_actuales,
-            canales_csv=canales_csv_actuales,
+            archivos_json=rutas_json_actuales,
+            canales_json=canales_json_actuales,
             cuadro=cuadro_actual,
             filtro=menu_canal.get() if menu_canal is not None else TODOS,
             lineas_conteo=motor_alertas.config.lineas_conteo_y_px,
@@ -363,14 +384,14 @@ def exportar_conteo():
         return
     registro = panel_correcciones.registro
     ruta = filedialog.asksaveasfilename(
-        defaultextension=".csv",
-        filetypes=[("CSV", "*.csv")],
-        initialfile="conteo_final.csv",
+        defaultextension=".json",
+        filetypes=[("JSON", "*.json")],
+        initialfile="conteo_final.json",
     )
     if not ruta:
         return
     try:
-        exportar_conteo_csv(ruta, registro, fps=fps_video)
+        exportar_conteo_json(ruta, registro, fps=fps_video)
     except ErrorPersistencia as exc:
         messagebox.showerror("No se pudo exportar", str(exc))
         return
@@ -395,7 +416,7 @@ def abrir_proyecto_guardado():
     faltantes = []
     if proyecto.video and not Path(proyecto.video).exists():
         faltantes.append(proyecto.video)
-    faltantes.extend(r for r in proyecto.csvs if not Path(r).exists())
+    faltantes.extend(r for r in proyecto.archivos_json if not Path(r).exists())
     if faltantes:
         messagebox.showerror(
             "Faltan archivos",
@@ -415,11 +436,11 @@ def abrir_proyecto_guardado():
     if proyecto.video and not _abrir_video_desde_ruta(proyecto.video):
         messagebox.showerror("No se pudo abrir", "No fue posible abrir el video del proyecto.")
         return
-    if proyecto.csvs and not _cargar_resultados_desde_rutas(
-        proyecto.csvs, proyecto.canales_csv, proyecto.registro
+    if proyecto.archivos_json and not _cargar_resultados_desde_rutas(
+        proyecto.archivos_json, proyecto.canales_json, proyecto.registro
     ):
         return
-    if not proyecto.csvs and panel_correcciones is not None:
+    if not proyecto.archivos_json and panel_correcciones is not None:
         panel_correcciones.cargar_registro(proyecto.registro)
 
     if proyecto.canales_archivo and Path(proyecto.canales_archivo).exists():
@@ -761,7 +782,7 @@ def _construir_tarjetas():
         vacio.pack(fill="both", expand=True, pady=45, padx=14)
         _etiqueta(vacio, "SIN ANOMALÍAS", MUTED, (UI, 11, "bold")).pack(pady=(8, 8))
         if resultados is None:
-            texto = "Carga un CSV para analizar los resultados."
+            texto = "Carga una configuración JSON para analizar los resultados."
         elif not motor_alertas.config.lineas_conteo_y_px:
             texto = ("No se detectaron anomalías. Sin canales del Tracker: "
                      "la alerta de línea está desactivada.")
@@ -857,7 +878,7 @@ def _cerrar():
 
 def main(nombre_usuario=None):
     global ventana, visor, texto_cuadro, texto_tiempo, texto_alertas
-    global menu_canal, texto_video, texto_csv, timeline, boton_play
+    global menu_canal, texto_video, texto_configuracion, timeline, boton_play
     global panel_tarjetas, canvas_alertas, estado_visor, estado_lineas
     global panel_correcciones, usuario_actual
 
@@ -898,16 +919,16 @@ def main(nombre_usuario=None):
     texto_video = _etiqueta(cargas, "VIDEO  Sin cargar", MUTED,
                             (MONO, 8), anchor="w", width=33)
     texto_video.pack(anchor="w")
-    texto_csv = _etiqueta(cargas, "DATOS  Sin cargar", MUTED,
+    texto_configuracion = _etiqueta(cargas, "DATOS  Sin cargar", MUTED,
                           (MONO, 8), anchor="w", width=33)
-    texto_csv.pack(anchor="w", pady=(3, 0))
+    texto_configuracion.pack(anchor="w", pady=(3, 0))
 
     _boton(barra, "Cargar video", cargar_video, compacto=True).pack(side="left", padx=(5, 6))
-    _boton(barra, "Cargar CSV", cargar_resultados, compacto=True).pack(side="left", padx=(0, 6))
+    _boton(barra, "Cargar configuración", cargar_resultados, compacto=True).pack(side="left", padx=(0, 6))
     _boton(barra, "Canales", cargar_canales_tracker, compacto=True).pack(side="left", padx=(0, 6))
     _boton(barra, "Abrir proyecto", abrir_proyecto_guardado, compacto=True).pack(side="left", padx=(0, 6))
     _boton(barra, "Guardar proyecto", guardar_proyecto_actual, compacto=True).pack(side="left", padx=(0, 6))
-    _boton(barra, "Exportar CSV", exportar_conteo, compacto=True).pack(side="left", padx=(0, 14))
+    _boton(barra, "Exportar JSON", exportar_conteo, compacto=True).pack(side="left", padx=(0, 14))
 
     selector = tk.Frame(barra, bg=PANEL)
     selector.pack(side="right", padx=(4, 21), pady=10)
