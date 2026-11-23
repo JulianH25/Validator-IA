@@ -174,6 +174,6 @@ def test_boton_cargar_configuracion_solo_canales(monkeypatch, tmp_path):
 def test_interfaz_ofrece_configuracion_json():
     codigo = (Path(__file__).parents[1] / "src/visor_video/visor_video.py").read_text(encoding="utf-8")
     assert '"Cargar configuración"' in codigo
-    assert '"Exportar JSON"' in codigo
+    assert '"Exportar configuración"' in codigo
     assert '*.csv' not in codigo
     assert 'initialfile="conteo_final.json"' in codigo
