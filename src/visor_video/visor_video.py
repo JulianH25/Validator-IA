@@ -928,7 +928,7 @@ def main(nombre_usuario=None):
     _boton(barra, "Canales", cargar_canales_tracker, compacto=True).pack(side="left", padx=(0, 6))
     _boton(barra, "Abrir proyecto", abrir_proyecto_guardado, compacto=True).pack(side="left", padx=(0, 6))
     _boton(barra, "Guardar proyecto", guardar_proyecto_actual, compacto=True).pack(side="left", padx=(0, 6))
-    _boton(barra, "Exportar JSON", exportar_conteo, compacto=True).pack(side="left", padx=(0, 14))
+    _boton(barra, "Exportar configuración", exportar_conteo, compacto=True).pack(side="left", padx=(0, 14))
 
     selector = tk.Frame(barra, bg=PANEL)
     selector.pack(side="right", padx=(4, 21), pady=10)
