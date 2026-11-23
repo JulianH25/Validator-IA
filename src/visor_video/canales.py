@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,13 @@ class Canal:
     linea_y: float
 
 
+def _id_canal(valor):
+    """'canal_1' / 'tubo_2' / 'Tubo 2' / '2' -> '1' / '2' / '2' / '2'."""
+    texto = str(valor).strip()
+    m = re.search(r"(\d+)\s*$", texto)
+    return m.group(1) if m else texto
+
+
 def _numero(valor, nombre, canal):
     if isinstance(valor, bool) or not isinstance(valor, (int, float)):
         raise ErrorCanales(f"Canal {canal}: «{nombre}» debe ser un número.")
@@ -32,14 +40,19 @@ def _numero(valor, nombre, canal):
 def _canal_desde_dict(id_canal, d):
     if not isinstance(d, dict):
         raise ErrorCanales(f"Canal {id_canal}: se esperaba un objeto con el recuadro.")
-    if all(k in d for k in ("x1", "y1", "x2", "y2")):
+    if "caja" in d:
+        caja = d["caja"]
+        if not isinstance(caja, (list, tuple)) or len(caja) != 4:
+            raise ErrorCanales(f"Canal {id_canal}: «caja» debe ser [x1, y1, x2, y2].")
+        x1, y1, x2, y2 = (_numero(v, "caja", id_canal) for v in caja)
+    elif all(k in d for k in ("x1", "y1", "x2", "y2")):
         x1, y1, x2, y2 = (_numero(d[k], k, id_canal) for k in ("x1", "y1", "x2", "y2"))
     elif all(k in d for k in ("x", "y", "w", "h")):
         x, y, w, h = (_numero(d[k], k, id_canal) for k in ("x", "y", "w", "h"))
         x1, y1, x2, y2 = x, y, x + w, y + h
     else:
         raise ErrorCanales(
-            f"Canal {id_canal}: falta el recuadro (x1,y1,x2,y2 o x,y,w,h)."
+            f"Canal {id_canal}: falta el recuadro (caja, x1,y1,x2,y2 o x,y,w,h)."
         )
     if x2 <= x1 or y2 <= y1:
         raise ErrorCanales(f"Canal {id_canal}: el recuadro tiene tamaño cero o negativo.")
@@ -48,24 +61,24 @@ def _canal_desde_dict(id_canal, d):
     linea = (y1 + y2) / 2 if valor_linea is None else _numero(valor_linea, "linea_y", id_canal)
     if not y1 <= linea <= y2:
         raise ErrorCanales(f"Canal {id_canal}: la línea de conteo queda fuera del recuadro.")
-    return Canal(str(id_canal), x1, y1, x2, y2, linea)
+    return Canal(id_canal, x1, y1, x2, y2, linea)
 
 
 def cargar_canales(ruta):
-    """Lee la configuración JSON de canales del tracker."""
+    """Lee los canales de un JSON (formato común v1 o archivo solo de canales)."""
     if Path(ruta).suffix.lower() != ".json":
         raise ErrorCanales("La configuración de canales debe ser un archivo JSON.")
     try:
-        datos = json.loads(Path(ruta).read_text(encoding="utf-8"))
+        datos = json.loads(Path(ruta).read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ErrorCanales(f"No se pudo leer el archivo de canales: {exc}") from exc
 
     bruto = datos.get("canales") if isinstance(datos, dict) else datos
     if isinstance(bruto, dict):
-        items = [(str(k), v) for k, v in bruto.items()]
+        items = [(_id_canal(k), v) for k, v in bruto.items()]
     elif isinstance(bruto, list):
         items = [
-            (str(v.get("canal", v.get("id", n))) if isinstance(v, dict) else str(n), v)
+            (_id_canal(v.get("canal", v.get("id", n))) if isinstance(v, dict) else str(n), v)
             for n, v in enumerate(bruto, start=1)
         ]
     else:

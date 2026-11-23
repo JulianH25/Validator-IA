@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from dataclasses import replace
 from collections import Counter
 
@@ -17,20 +17,24 @@ from PIL import Image, ImageTk
 try:
     from .resultados import ErrorResultados, cargar_varios
     from .alertas import MotorAlertas
+    from .frames_a_video import ErrorFrames, frames_a_video, listar_frames
     from .canales import ErrorCanales, cargar_canales
     from .correcciones import eventos_desde_resultados
     from .panel_correcciones import PanelCorrecciones
     from .persistencia import ErrorPersistencia, cargar_proyecto, exportar_conteo_json, guardar_proyecto
+    from .importar_tracker import ErrorImportacion, convertir as convertir_tracker
     from .login import VentanaLogin
     from .database import obtener_usuario
     from . import sesion
 except ImportError:
     from resultados import ErrorResultados, cargar_varios
     from alertas import MotorAlertas
+    from frames_a_video import ErrorFrames, frames_a_video, listar_frames
     from canales import ErrorCanales, cargar_canales
     from correcciones import eventos_desde_resultados
     from panel_correcciones import PanelCorrecciones
     from persistencia import ErrorPersistencia, cargar_proyecto, exportar_conteo_json, guardar_proyecto
+    from importar_tracker import ErrorImportacion, convertir as convertir_tracker
     from login import VentanaLogin
     from database import obtener_usuario
     import sesion
@@ -157,7 +161,96 @@ def _abrir_video_desde_ruta(ruta):
     return True
 
 
+def _cargar_video_desde_frames():
+    ruta_img = filedialog.askopenfilename(
+        title="Elige cualquier frame de la carpeta",
+        filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.bmp"), ("Todos", "*.*")],
+    )
+    if not ruta_img:
+        return
+    carpeta = str(Path(ruta_img).parent)
+    
+    try:
+        n = len(listar_frames(carpeta))
+    except ErrorFrames as exc:
+        messagebox.showerror("Carpeta de frames", str(exc))
+        return
+
+    fps = simpledialog.askfloat(
+        "Cuadros por segundo",
+        f"Se encontraron {n} frames.\n¿A cuántos cuadros por segundo se grabó? (ej. 50)",
+        initialvalue=50.0, minvalue=1.0, maxvalue=240.0, parent=ventana,
+    )
+    if fps is None:
+        return
+
+    # El video queda junto a la carpeta: .../seq_0004/  ->  .../seq_0004.mp4
+    base = Path(carpeta)
+    destino = base.parent / f"{base.name}.mp4"
+    if destino.exists():
+        respuesta = messagebox.askyesnocancel(
+            "Video existente",
+            f"Ya existe «{destino.name}».\n\n"
+            "Sí  =  usarlo\nNo  =  crearlo de nuevo\nCancelar  =  salir",
+        )
+        if respuesta is None:
+            return
+        if respuesta:
+            if not _abrir_video_desde_ruta(destino):
+                messagebox.showerror("No se pudo abrir", "No fue posible abrir el video.")
+            return
+
+    espera = tk.Toplevel(ventana)
+    espera.title("Creando video")
+    espera.configure(bg=PANEL, padx=20, pady=16)
+    espera.resizable(False, False)
+    espera.transient(ventana)
+    _etiqueta(espera, f"Creando video con {n} frames…", WHITE).pack(anchor="w")
+    barra = ttk.Progressbar(espera, length=320, maximum=n)
+    barra.pack(pady=(10, 0))
+    espera.update()
+    espera.grab_set()
+
+    def progreso(hecho, total):
+        barra["value"] = hecho
+        espera.update()
+
+    try:
+        info = frames_a_video(carpeta, destino, fps, progreso)
+    except (ErrorFrames, OSError) as exc:
+        espera.destroy()
+        messagebox.showerror("No se pudo crear el video", str(exc))
+        return
+    espera.destroy()
+
+    if info["faltantes"]:
+        ejemplos = ", ".join(str(x) for x in info["primeros_faltantes"][:5])
+        messagebox.showwarning(
+            "Faltan frames en la numeración",
+            f"Faltan {info['faltantes']} números en la carpeta (por ejemplo: {ejemplos}).\n\n"
+            "El video los omite, así que desde ese punto el cuadro del video ya no "
+            "coincide con el número del archivo. Confirma con quien hizo el tracker "
+            "qué numeración usó.",
+        )
+
+    if not _abrir_video_desde_ruta(destino):
+        messagebox.showerror("No se pudo abrir", "No fue posible abrir el video creado.")
+
+
 def cargar_video():
+    eleccion = messagebox.askyesnocancel(
+        "Cargar video",
+        "¿Qué quieres cargar?\n\n"
+        "Sí  =  archivo de video (.mp4)\n"
+        "No  =  carpeta de frames (se convierte a video)\n"
+        "Cancelar  =  salir",
+    )
+    if eleccion is None:
+        return
+    if not eleccion:
+        _cargar_video_desde_frames()
+        return
+
     ruta = filedialog.askopenfilename(
         filetypes=[("Video MP4", "*.mp4"), ("Todos", "*.*")]
     )
@@ -246,10 +339,18 @@ def _cargar_resultados_desde_rutas(rutas, canales_guardados=None, registro_resta
 
 def cargar_resultados():
     rutas = filedialog.askopenfilenames(
-        filetypes=[("Configuración JSON del tracker", "*.json")]
+        title="Selecciona los archivos del tracker (CSV + JSON) o un JSON de formato común",
+        filetypes=[("Archivos del tracker", "*.json *.csv"), ("JSON", "*.json"), ("CSV", "*.csv")],
     )
     if not rutas:
         return
+    if any(Path(r).suffix.lower() == ".csv" for r in rutas):
+        try:
+            convertido = convertir_tracker(rutas)
+        except ErrorImportacion as exc:
+            messagebox.showerror("No se pudo importar el tracker", str(exc))
+            return
+        rutas = (str(convertido),)
     if len(rutas) == 1:
         try:
             datos = json.loads(Path(rutas[0]).read_text(encoding="utf-8-sig"))

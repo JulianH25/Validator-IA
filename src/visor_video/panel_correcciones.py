@@ -6,11 +6,17 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 try:
-    from .correcciones import ErrorCorreccion, RegistroCorrecciones, ORIGEN_MANUAL
+    from .correcciones import (
+        ErrorCorreccion, RegistroCorrecciones,
+        ESTADO_AGREGADO, ESTADO_ELIMINADO, ESTADO_MOVIDO,
+    )
     from .persistencia import describir_operacion
     from .database import guardar_correccion
 except ImportError:
-    from correcciones import ErrorCorreccion, RegistroCorrecciones, ORIGEN_MANUAL
+    from correcciones import (
+        ErrorCorreccion, RegistroCorrecciones,
+        ESTADO_AGREGADO, ESTADO_ELIMINADO, ESTADO_MOVIDO,
+    )
     from persistencia import describir_operacion
     from database import guardar_correccion
 
@@ -19,12 +25,25 @@ PANEL = "#21252B"
 PANEL_ALT = "#292E37"
 BORDER = "#3A3F4B"
 BLUE = "#3B82F6"
+GREEN = "#10B981"
 RED = "#EF4444"
 AMBER = "#F59E0B"
 WHITE = "#F3F4F6"
 MUTED = "#9CA3AF"
 MONO = "Consolas"
 UI = "Segoe UI"
+
+# Color del texto de cada estado, y fondo (más oscuro) cuando la fila está seleccionada.
+COLOR_ESTADO = {
+    ESTADO_AGREGADO: GREEN,
+    ESTADO_ELIMINADO: RED,
+    ESTADO_MOVIDO: AMBER,
+}
+FONDO_SELECCION = {
+    ESTADO_AGREGADO: "#064E3B",
+    ESTADO_ELIMINADO: "#7F1D1D",
+    ESTADO_MOVIDO: "#78350F",
+}
 
 
 class _DialogoEvento(tk.Toplevel):
@@ -107,7 +126,10 @@ class PanelCorrecciones(tk.Frame):
         self._canales = tuple(canales)
         self._usuario_id = usuario_id
         self.registro: RegistroCorrecciones | None = None
+        # Datos de cada fila de la lista (mismo orden que lo que se ve).
         self._ids: list[int] = []
+        self._estados: list[str | None] = []
+        self._cuadros: list[int] = []
 
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x", pady=(0, 8))
         cabecera = tk.Frame(self, bg=PANEL)
@@ -117,6 +139,12 @@ class PanelCorrecciones(tk.Frame):
         self._conteos = tk.Label(cabecera, text="Sin resultados", bg=PANEL,
                                  fg=MUTED, font=(MONO, 9, "bold"))
         self._conteos.pack(side="right")
+
+        leyenda = tk.Frame(self, bg=PANEL)
+        leyenda.pack(fill="x", pady=(4, 0))
+        for texto, color in (("+ agregado", GREEN), ("✕ eliminado", RED), ("↔ movido", AMBER)):
+            tk.Label(leyenda, text=texto, bg=PANEL, fg=color,
+                     font=(UI, 8, "bold")).pack(side="left", padx=(0, 10))
 
         caja = tk.Frame(self, bg=PANEL)
         caja.pack(fill="x", pady=(6, 6))
@@ -168,19 +196,42 @@ class PanelCorrecciones(tk.Frame):
         self.registro = registro
         self.refrescar()
 
+    @staticmethod
+    def _formato_fila(evento, estado, previo):
+        """Texto de una fila de la lista según el estado del conteo."""
+        pez = f"ID {evento.id_pez}" if evento.id_pez else "manual"
+        base = f"T{evento.canal}  frame {evento.cuadro + 1:05d}  {pez}"
+        if estado == ESTADO_AGREGADO:
+            return f"+ {base}"
+        if estado == ESTADO_ELIMINADO:
+            return f"✕ {base}"
+        if estado == ESTADO_MOVIDO and previo is not None:
+            return (f"↔ T{previo.canal} {previo.cuadro + 1:05d} → "
+                    f"T{evento.canal} {evento.cuadro + 1:05d}  {pez}")
+        return f"  {base}"
+
     def refrescar(self, seleccionar=None, notificar=True):
         self._lista.delete(0, "end")
         self._ids = []
+        self._estados = []
+        self._cuadros = []
         if self.registro is None:
             self._conteos.configure(text="Sin resultados", fg=MUTED)
             self._btn_deshacer.configure(state="disabled")
             return
         canal = self._obtener_canal()
-        for e in self.registro.eventos(canal):
-            marca = "✎" if e.origen == ORIGEN_MANUAL else " "
-            pez = f"ID {e.id_pez}" if e.id_pez else "manual"
-            self._lista.insert("end", f"{marca} T{e.canal}  frame {e.cuadro + 1:05d}  {pez}")
-            self._ids.append(e.id)
+        for evento, estado, previo in self.registro.filas(canal):
+            self._lista.insert("end", self._formato_fila(evento, estado, previo))
+            fila = self._lista.size() - 1
+            color = COLOR_ESTADO.get(estado)
+            if color:
+                self._lista.itemconfigure(
+                    fila, foreground=color, selectforeground=color,
+                    selectbackground=FONDO_SELECCION[estado],
+                )
+            self._ids.append(evento.id)
+            self._estados.append(estado)
+            self._cuadros.append(evento.cuadro)
         if seleccionar in self._ids:
             fila = self._ids.index(seleccionar)
             self._lista.selection_set(fila)
@@ -195,7 +246,6 @@ class PanelCorrecciones(tk.Frame):
             state="normal" if self.registro.puede_deshacer else "disabled")
         if notificar and self._al_cambiar:
             self._al_cambiar()
-
 
     def mostrar_historial(self):
         if not self._hay_registro():
@@ -219,13 +269,20 @@ class PanelCorrecciones(tk.Frame):
         tk.Button(ventana, text="Cerrar", command=ventana.destroy, bg=PANEL_ALT,
                   fg=WHITE, relief="flat", padx=14, pady=6).pack(anchor="e", pady=(10, 0))
 
-    def _seleccionado(self):
+    def _seleccionado(self, permitir_eliminado=False):
         seleccion = self._lista.curselection()
         if not seleccion:
             messagebox.showinfo("Selecciona un conteo",
                                 "Elige un conteo de la lista primero.")
             return None
-        return self._ids[seleccion[0]]
+        fila = seleccion[0]
+        if not permitir_eliminado and self._estados[fila] == ESTADO_ELIMINADO:
+            messagebox.showinfo(
+                "Conteo eliminado",
+                "Ese conteo ya está eliminado.\nUsa Deshacer (Ctrl+Z) si quieres recuperarlo.",
+            )
+            return None
+        return self._ids[fila]
 
     def _guardar_operacion(self, operacion):
         if self._usuario_id is None or operacion is None:
@@ -257,7 +314,7 @@ class PanelCorrecciones(tk.Frame):
     def _saltar(self, _evento=None):
         seleccion = self._lista.curselection()
         if seleccion and self.registro is not None:
-            self._ir_a_frame(self.registro.evento(self._ids[seleccion[0]]).cuadro)
+            self._ir_a_frame(self._cuadros[seleccion[0]])
 
     def agregar(self):
         if not self._hay_registro():
@@ -296,7 +353,8 @@ class PanelCorrecciones(tk.Frame):
         operacion = self.registro.historial[-1]
         self._guardar_operacion(operacion)
 
-        self.refrescar()
+        # El conteo eliminado sigue en la lista, en rojo, y queda seleccionado.
+        self.refrescar(seleccionar=evento_id)
 
     def mover(self):
         if not self._hay_registro():
@@ -320,7 +378,7 @@ class PanelCorrecciones(tk.Frame):
         self._guardar_operacion(operacion)
 
         self.refrescar(seleccionar=evento_id)
-        
+
     def deshacer(self, _evento=None):
         if self.registro is None or not self.registro.puede_deshacer:
             return

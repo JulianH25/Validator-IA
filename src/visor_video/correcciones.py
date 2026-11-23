@@ -13,6 +13,12 @@ ELIMINAR = "ELIMINAR"
 MOVER = "MOVER"
 DESHACER = "DESHACER"
 
+# Estado de un conteo respecto de lo que entregó el Tracker.
+ESTADO_NORMAL = "normal"
+ESTADO_AGREGADO = "agregado"
+ESTADO_ELIMINADO = "eliminado"
+ESTADO_MOVIDO = "movido"
+
 
 class ErrorCorreccion(Exception):
     """Error con un mensaje pensado para mostrar al usuario."""
@@ -54,6 +60,7 @@ class RegistroCorrecciones:
         self._actuales = {e.id: e for e in self._original}
         if len(self._actuales) != len(self._original):
             raise ErrorCorreccion("Hay eventos de conteo con id repetido.")
+        self._original_por_id = dict(self._actuales)
         self._siguiente_id = max(self._actuales, default=0) + 1
         self._operaciones: list[Operacion] = []
         self._pila: list[int] = []
@@ -84,6 +91,35 @@ class RegistroCorrecciones:
         """Eventos actuales ordenados por canal y cuadro."""
         lista = [e for e in self._actuales.values() if canal is None or e.canal == canal]
         return sorted(lista, key=_clave_evento)
+
+    def estado(self, evento_id):
+        """Estado de un conteo respecto del original: normal, agregado, eliminado
+        o movido. Devuelve None si nunca existió o si se agregó y luego se quitó."""
+        actual = self._actuales.get(evento_id)
+        previo = self._original_por_id.get(evento_id)
+        if actual is None:
+            return ESTADO_ELIMINADO if previo is not None else None
+        if previo is None:
+            return ESTADO_AGREGADO
+        if (actual.canal, actual.cuadro) == (previo.canal, previo.cuadro):
+            return ESTADO_NORMAL
+        return ESTADO_MOVIDO
+
+    def filas(self, canal=None):
+        """Lista para mostrar: [(evento, estado, original)] ordenada por canal y cuadro.
+
+        Incluye los conteos vigentes y también los eliminados del Tracker (con su
+        posición original), para que se vean tachados en el panel. Un conteo movido
+        aparece en su posición nueva y `original` trae la anterior.
+        """
+        filas = []
+        for e in self._actuales.values():
+            if canal is None or e.canal == canal:
+                filas.append((e, self.estado(e.id), self._original_por_id.get(e.id)))
+        for o in self._original:
+            if o.id not in self._actuales and (canal is None or o.canal == canal):
+                filas.append((o, ESTADO_ELIMINADO, o))
+        return sorted(filas, key=lambda f: _clave_evento(f[0]))
 
     def conteo(self, canal):
         return sum(1 for e in self._actuales.values() if e.canal == canal)
