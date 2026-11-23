@@ -26,6 +26,7 @@ class ProyectoCargado:
     lineas_conteo: dict[str, float]
     registro: RegistroCorrecciones
     canales_archivo: str | None = None
+    alertas_revisadas: tuple[str, ...] = ()
 
 
 def _evento_a_dict(evento: EventoConteo | None):
@@ -134,7 +135,8 @@ def guardar_proyecto(
     cuadro=0,
     filtro="Todos (T1 + T2)",
     lineas_conteo=None,
-    canales_archivo=None
+    canales_archivo=None,
+    alertas_revisadas=()
 ):
     if registro is None:
         raise ErrorPersistencia("No hay resultados ni correcciones para guardar.")
@@ -163,6 +165,7 @@ def guardar_proyecto(
         "lineas_conteo": {str(k): float(v) for k, v in (lineas_conteo or {}).items()},
         "correcciones": registro_a_dict(registro),
         "canales_archivo": str(Path(canales_archivo).resolve()) if canales_archivo else None,
+        "alertas_revisadas": sorted(str(k) for k in alertas_revisadas),
     }
 
     temporal = destino.with_suffix(destino.suffix + ".tmp")
@@ -213,6 +216,7 @@ def cargar_proyecto(ruta):
             lineas_conteo={str(k): float(v) for k, v in datos.get("lineas_conteo", {}).items()},
             registro=registro_desde_dict(datos["correcciones"]),
             canales_archivo=ruta_canales,
+            alertas_revisadas=tuple(str(k) for k in datos.get("alertas_revisadas", [])),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ErrorPersistencia("El archivo de proyecto está incompleto.") from exc

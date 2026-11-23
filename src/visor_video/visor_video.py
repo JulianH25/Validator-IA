@@ -24,7 +24,7 @@ try:
     from .persistencia import ErrorPersistencia, cargar_proyecto, exportar_conteo_json, guardar_proyecto
     from .importar_tracker import ErrorImportacion, convertir as convertir_tracker
     from .login import VentanaLogin
-    from .database import obtener_usuario
+    from .database import guardar_correccion, obtener_usuario
     from . import sesion
 except ImportError:
     from resultados import ErrorResultados, cargar_varios
@@ -36,7 +36,7 @@ except ImportError:
     from persistencia import ErrorPersistencia, cargar_proyecto, exportar_conteo_json, guardar_proyecto
     from importar_tracker import ErrorImportacion, convertir as convertir_tracker
     from login import VentanaLogin
-    from database import obtener_usuario
+    from database import guardar_correccion, obtener_usuario
     import sesion
 
 
@@ -94,6 +94,9 @@ canales_json_actuales = {}
 ruta_proyecto_actual = None
 
 alerta_seleccionada = None
+alertas_revisadas = set()
+detalles_tarjetas = []
+boton_revisada = None
 frames_tarjetas = []
 reproduciendo = False
 reproduccion_after = None
@@ -277,7 +280,8 @@ def _preguntar_tubo(ruta):
     return "1" if respuesta else "2"
 
 
-def _cargar_resultados_desde_rutas(rutas, canales_guardados=None, registro_restaurado=None):
+def _cargar_resultados_desde_rutas(rutas, canales_guardados=None, registro_restaurado=None,
+                                   revisadas=None):
     global resultados, etiqueta_a_canal, rutas_json_actuales, canales_json_actuales
     rutas = tuple(str(Path(r).resolve()) for r in rutas)
     guardados = {str(Path(k).resolve()): str(v) for k, v in (canales_guardados or {}).items()}
@@ -332,6 +336,8 @@ def _cargar_resultados_desde_rutas(rutas, canales_guardados=None, registro_resta
         else:
             registro_restaurado.total_cuadros = total_cuadros or registro_restaurado.total_cuadros
             panel_correcciones.cargar_registro(registro_restaurado)
+    alertas_revisadas.clear()
+    alertas_revisadas.update(revisadas or ())
     actualizar_alertas()
     mostrar_cuadro()
     return True
@@ -472,6 +478,7 @@ def guardar_proyecto_actual():
             filtro=menu_canal.get() if menu_canal is not None else TODOS,
             lineas_conteo=motor_alertas.config.lineas_conteo_y_px,
             canales_archivo=ruta_canales_actual,
+            alertas_revisadas=sorted(alertas_revisadas),
         )
     except ErrorPersistencia as exc:
         messagebox.showerror("No se pudo guardar", str(exc))
@@ -529,6 +536,8 @@ def abrir_proyecto_guardado():
     resultados = None
     etiqueta_a_canal = {}
     alerta_seleccionada = None
+    alertas_revisadas.clear()
+    alertas_revisadas.update(proyecto.alertas_revisadas)
     canales_actuales = {}
     ruta_canales_actual = None
     if panel_correcciones is not None:
@@ -538,7 +547,8 @@ def abrir_proyecto_guardado():
         messagebox.showerror("No se pudo abrir", "No fue posible abrir el video del proyecto.")
         return
     if proyecto.archivos_json and not _cargar_resultados_desde_rutas(
-        proyecto.archivos_json, proyecto.canales_json, proyecto.registro
+        proyecto.archivos_json, proyecto.canales_json, proyecto.registro,
+        revisadas=proyecto.alertas_revisadas,
     ):
         return
     if not proyecto.archivos_json and panel_correcciones is not None:
@@ -603,12 +613,84 @@ def _filtrar_alertas():
         a for a in todas_las_alertas if canal is None or str(a.canal) == canal
     ]
     alerta_seleccionada = None
-    if texto_alertas is not None:
-        texto_alertas.configure(
-            text=f"{len(alertas_detectadas)} ALERTA"
-                 f"{'S' if len(alertas_detectadas) != 1 else ''}"
-        )
+    _actualizar_contador_alertas()
     _construir_tarjetas()
+    _actualizar_boton_revisada()
+    _dibujar_timeline()
+
+
+def _clave_alerta(alerta):
+    return f"{alerta.tipo}|{alerta.canal}|{alerta.cuadro}|{','.join(alerta.ids_pez)}"
+
+
+def _esta_revisada(alerta):
+    return _clave_alerta(alerta) in alertas_revisadas
+
+
+def _actualizar_contador_alertas():
+    if texto_alertas is None:
+        return
+    total = len(alertas_detectadas)
+    revisadas = sum(1 for a in alertas_detectadas if _esta_revisada(a))
+    texto = f"{total} ALERTA{'S' if total != 1 else ''}"
+    if revisadas:
+        texto += f" · {revisadas} REVISADA{'S' if revisadas != 1 else ''}"
+    texto_alertas.configure(text=texto)
+
+
+def _actualizar_boton_revisada():
+    if boton_revisada is None:
+        return
+    elegida = (alerta_seleccionada is not None
+               and 0 <= alerta_seleccionada < len(alertas_detectadas)
+               and _esta_revisada(alertas_detectadas[alerta_seleccionada]))
+    boton_revisada.configure(text="↺  Quitar  R" if elegida else "✓  Revisada  R")
+
+
+def _aplicar_estado_tarjeta(indice):
+    if not 0 <= indice < min(len(detalles_tarjetas), len(alertas_detectadas)):
+        return
+    punto, titulo, marca = detalles_tarjetas[indice]
+    alerta = alertas_detectadas[indice]
+    revisada = _esta_revisada(alerta)
+    punto.configure(fg=GREEN if revisada else _color_alerta(alerta))
+    titulo.configure(fg=MUTED if revisada else WHITE)
+    marca.configure(text="✓ REVISADA" if revisada else "")
+
+
+def _registrar_revision(alerta):
+    if sesion.usuario_id is None:
+        return
+    try:
+        guardar_correccion(
+            usuario_id=sesion.usuario_id,
+            tipo_correccion="ALERTA_REVISADA",
+            canal=str(alerta.canal),
+            cuadro=alerta.cuadro,
+            id_pez=",".join(alerta.ids_pez) or None,
+        )
+    except Exception as exc:
+        messagebox.showwarning(
+            "Historial",
+            f"La alerta se marcó, pero no se pudo guardar en el historial local.\n\n{exc}",
+        )
+
+
+def alternar_revisada(evento=None):
+    """Marca o desmarca como revisada la alerta seleccionada."""
+    if alerta_seleccionada is None or not 0 <= alerta_seleccionada < len(alertas_detectadas):
+        messagebox.showinfo("Selecciona una alerta", "Elige una alerta de la lista primero.")
+        return
+    alerta = alertas_detectadas[alerta_seleccionada]
+    clave = _clave_alerta(alerta)
+    if clave in alertas_revisadas:
+        alertas_revisadas.discard(clave)
+    else:
+        alertas_revisadas.add(clave)
+        _registrar_revision(alerta)
+    _aplicar_estado_tarjeta(alerta_seleccionada)
+    _actualizar_contador_alertas()
+    _actualizar_boton_revisada()
     _dibujar_timeline()
 
 
@@ -839,7 +921,8 @@ def _dibujar_timeline(evento=None):
     for alerta in alertas_detectadas:
         if 0 <= alerta.cuadro < total_cuadros:
             x = izquierda + alerta.cuadro * factor
-            timeline.create_line(x, y-12, x, y+12, fill=RED, width=2)
+            timeline.create_line(x, y-12, x, y+12,
+                                 fill=GREEN if _esta_revisada(alerta) else RED, width=2)
     x_actual = izquierda + cuadro_actual * factor
     timeline.create_line(izquierda, y, x_actual, y, fill=BLUE, width=6)
     timeline.create_oval(x_actual-7, y-7, x_actual+7, y+7,
@@ -856,11 +939,12 @@ def _seleccionar_en_timeline(evento):
 
 
 def _limpiar_tarjetas():
-    global frames_tarjetas
+    global frames_tarjetas, detalles_tarjetas
     if panel_tarjetas is not None:
         for hijo in panel_tarjetas.winfo_children():
             hijo.destroy()
     frames_tarjetas = []
+    detalles_tarjetas = []
 
 
 def _seleccionar_alerta(indice, saltar=False):
@@ -869,6 +953,7 @@ def _seleccionar_alerta(indice, saltar=False):
         return
     alerta_seleccionada = indice
     _resaltar_tarjetas()
+    _actualizar_boton_revisada()
     if saltar:
         detener_reproduccion()
         ir_a_frame(alertas_detectadas[indice].cuadro)
@@ -907,10 +992,13 @@ def _construir_tarjetas():
                  fg=MUTED, font=(MONO, 9)).pack(side="right")
         segunda = tk.Frame(tarjeta, bg=PANEL_ALT)
         segunda.pack(fill="x", pady=(7, 0))
-        tk.Label(segunda, text="●", bg=PANEL_ALT, fg=_color_alerta(alerta),
-                 font=(UI, 12)).pack(side="left")
+        punto = tk.Label(segunda, text="●", bg=PANEL_ALT, fg=_color_alerta(alerta),
+                         font=(UI, 12))
+        punto.pack(side="left")
         titulo = _etiqueta(segunda, _titulo_alerta(alerta), WHITE, (UI, 10, "bold"))
         titulo.pack(side="left", padx=(5, 0))
+        marca = tk.Label(segunda, text="", bg=PANEL_ALT, fg=GREEN, font=(MONO, 8, "bold"))
+        marca.pack(side="right")
         ids = ", ".join(alerta.ids_pez) if alerta.ids_pez else "—"
         _etiqueta(tarjeta, f"ID: {ids}", MUTED, (MONO, 9), anchor="w").pack(fill="x", pady=(4, 0))
         saltar = _etiqueta(tarjeta, "CLICK PARA SALTAR  ›", AMBER,
@@ -923,6 +1011,8 @@ def _construir_tarjetas():
             hijo.bind("<Button-1>", lambda e, i=indice: _seleccionar_alerta(i, True))
             hijo.bind("<MouseWheel>", _al_mousewheel)
         frames_tarjetas.append((borde, tarjeta, alerta))
+        detalles_tarjetas.append((punto, titulo, marca))
+        _aplicar_estado_tarjeta(indice)
     _resaltar_tarjetas()
 
 
@@ -968,6 +1058,8 @@ def _tecla(evento):
         anterior_cuadro()
     elif tecla == "d":
         siguiente_cuadro()
+    elif tecla == "r":
+        alternar_revisada()
 
 
 def _cerrar():
@@ -981,7 +1073,7 @@ def main(nombre_usuario=None):
     global ventana, visor, texto_cuadro, texto_tiempo, texto_alertas
     global menu_canal, texto_video, texto_configuracion, timeline, boton_play
     global panel_tarjetas, canvas_alertas, estado_visor, estado_lineas
-    global panel_correcciones, usuario_actual
+    global panel_correcciones, usuario_actual, boton_revisada
 
     usuario_actual = nombre_usuario
 
@@ -1100,18 +1192,26 @@ def main(nombre_usuario=None):
     derecha = tk.Frame(contenido, bg=PANEL, highlightbackground=BORDER,
                        highlightthickness=1)
     derecha.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
-    derecho_header = tk.Frame(derecha, bg=PANEL)
+    divisor = tk.PanedWindow(derecha, orient="vertical", bg=BORDER, bd=0, sashwidth=8,
+                             sashrelief="flat", sashcursor="sb_v_double_arrow",
+                             opaqueresize=True)
+    divisor.pack(fill="both", expand=True)
+    zona_alertas = tk.Frame(divisor, bg=PANEL)
+    zona_correcciones = tk.Frame(divisor, bg=PANEL)
+    divisor.add(zona_alertas, minsize=170, stretch="always")
+    divisor.add(zona_correcciones, minsize=250, stretch="always")
+    derecho_header = tk.Frame(zona_alertas, bg=PANEL)
     derecho_header.pack(fill="x", padx=16, pady=(18, 11))
     _etiqueta(derecho_header, "MOTOR DE ALERTAS", WHITE,
               (UI, 11, "bold")).pack(side="left")
     texto_alertas = tk.Label(derecho_header, text="0 ALERTAS", bg="#482A31",
                              fg="#FCA5A5", padx=9, pady=5, font=(MONO, 8, "bold"))
     texto_alertas.pack(side="right")
-    tk.Frame(derecha, bg=BORDER, height=1).pack(fill="x", padx=16)
-    _etiqueta(derecha, "Selecciona una alerta para ir al fotograma.",
+    tk.Frame(zona_alertas, bg=BORDER, height=1).pack(fill="x", padx=16)
+    _etiqueta(zona_alertas, "Selecciona una alerta para ir al fotograma.",
               MUTED, (UI, 9), anchor="w", wraplength=300).pack(fill="x", padx=16,
                                                                pady=(12, 12))
-    panel_scrolling = tk.Frame(derecha, bg=PANEL)
+    panel_scrolling = tk.Frame(zona_alertas, bg=PANEL)
     panel_scrolling.pack(fill="both", expand=True)
     scrollbar = tk.Scrollbar(panel_scrolling, bg=PANEL_ALT, troughcolor=PANEL,
                              activebackground=BLUE, width=10)
@@ -1131,11 +1231,16 @@ def main(nombre_usuario=None):
     canvas_alertas.bind("<Button-5>", _al_mousewheel)
     panel_tarjetas.bind("<MouseWheel>", _al_mousewheel)
 
-    footer = tk.Frame(derecha, bg=PANEL)
+    footer = tk.Frame(zona_alertas, bg=PANEL)
     footer.pack(fill="x", side="bottom", padx=15, pady=14,
                 before=panel_scrolling)
-    _boton(footer, "Ir a alerta seleccionada  ↗", ir_a_alerta,
-           compacto=True).pack(fill="x")
+    botones_alerta = tk.Frame(footer, bg=PANEL)
+    botones_alerta.pack(fill="x")
+    _boton(botones_alerta, "Ir a alerta  ↗", ir_a_alerta,
+           compacto=True).pack(side="left", expand=True, fill="x", padx=(0, 3))
+    boton_revisada = _boton(botones_alerta, "✓  Revisada  R", alternar_revisada,
+                            compacto=True)
+    boton_revisada.pack(side="left", expand=True, fill="x", padx=(3, 0))
     _etiqueta(footer, "Resultados del tracker · Correcciones editables",
               MUTED, (UI, 8)).pack(pady=(9, 0))
     estado_lineas = _etiqueta(footer, "", AMBER, (MONO, 8),
@@ -1144,7 +1249,7 @@ def main(nombre_usuario=None):
     _actualizar_estado_lineas()
 
     panel_correcciones = PanelCorrecciones(
-        derecha,
+        zona_correcciones,
         obtener_canal=canal_elegido,
         obtener_cuadro=lambda: cuadro_actual,
         obtener_total=lambda: total_cuadros,
@@ -1153,8 +1258,18 @@ def main(nombre_usuario=None):
         canales=TUBOS,
         usuario_id=sesion.usuario_id,
     )
-    panel_correcciones.pack(fill="x", side="bottom", padx=15, pady=(0, 6),
-                            before=panel_scrolling)
+    panel_correcciones.pack(fill="both", expand=True, padx=15, pady=(0, 6))
+    # La lista de correcciones crece al agrandar el panel con el divisor.
+    panel_correcciones._lista.master.pack_configure(fill="both", expand=True)
+    panel_correcciones._lista.pack_configure(fill="both", expand=True)
+
+    def _ajustar_divisor():
+        ventana.update_idletasks()
+        minimo = max(250, panel_correcciones.winfo_reqheight() + 10)
+        divisor.paneconfigure(zona_correcciones, minsize=minimo)
+        divisor.sash_place(0, 0, max(170, divisor.winfo_height() - minimo - 120))
+
+    ventana.after(100, _ajustar_divisor)
 
     ventana.bind("<KeyPress>", _tecla)
     ventana.bind("<Control-z>", lambda e: panel_correcciones.deshacer())
