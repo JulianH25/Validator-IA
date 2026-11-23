@@ -1,60 +1,58 @@
-import os
-import tempfile
+import json
+
 import pytest
 
-from visor_video.resultados import (
-    ErrorResultados, cargar_csv, etiqueta_canal,
-)
+from visor_video.resultados import ErrorResultados, cargar_json, etiqueta_canal
 
 
-def escribir(texto):
-    f = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, encoding="utf-8")
-    f.write(texto)
-    f.close()
-    return f.name
+def guardar(tmp_path, nombre, datos):
+    ruta = tmp_path / nombre
+    ruta.write_text(json.dumps(datos, ensure_ascii=False), encoding="utf-8")
+    return ruta
 
 
-BASE = (
-    "frame,track_id,x1,y1,x2,y2,canal\n"
-    "0,1,10,10,50,40,1\n"
-    "0,2,10,100,50,140,2\n"
-    "1,1,10,20,50,50,1\n"
-    "1,3,10,200,50,240,10\n"
-)
+BASE = [
+    {"frame": 0, "track_id": 1, "x1": 10, "y1": 10, "x2": 50, "y2": 40, "canal": "1"},
+    {"frame": 0, "track_id": 2, "x1": 10, "y1": 100, "x2": 50, "y2": 140, "canal": "2"},
+    {"frame": 1, "track_id": 1, "x1": 10, "y1": 20, "x2": 50, "y2": 50, "canal": "1"},
+    {"frame": 1, "track_id": 3, "x1": 10, "y1": 200, "x2": 50, "y2": 240, "canal": "10"},
+]
 
 
-def test_agrupa_por_canal_y_cuadro():
-    r = cargar_csv(escribir(BASE))
-    assert r.canales == ["1", "2", "10"]          # orden natural
+def test_agrupa_por_canal_y_cuadro(tmp_path):
+    r = cargar_json(guardar(tmp_path, "datos.json", {"detecciones": BASE}))
+    assert r.canales == ["1", "2", "10"]
     assert [d.id_pez for d in r.en_cuadro(0, "2")] == ["2"]
-    assert r.en_cuadro(1, "2") == []              # tubo sin peces en ese cuadro
-    assert len(r.en_cuadro(0)) == 2               # todos los tubos
+    assert r.en_cuadro(1, "2") == []
+    assert len(r.en_cuadro(0)) == 2
     assert r.ultimo_cuadro == 1
     assert r.peces_por_canal() == {"1": 1, "2": 1, "10": 1}
 
 
-def test_separador_punto_y_coma_y_alias_xywh():
-    r = cargar_csv(escribir("cuadro;id;x;y;w;h;tubo\n5;7;10;20;30;40;2\n"))
-    d = r.en_cuadro(5, "2")[0]
+def test_alias_xywh(tmp_path):
+    ruta = guardar(tmp_path, "tubo2.json", [{"cuadro": 5, "id": 7, "x": 10, "y": 20, "w": 30, "h": 40, "tubo": "2"}])
+    d = cargar_json(ruta).en_cuadro(5, "2")[0]
     assert (d.x1, d.y1, d.x2, d.y2) == (10, 20, 40, 60)
 
 
-def test_columnas_faltantes():
+def test_campos_faltantes(tmp_path):
+    ruta = guardar(tmp_path, "sin_canal.json", [{"frame": 0, "track_id": "1", "x1": 1, "y1": 1, "x2": 2, "y2": 2}])
     with pytest.raises(ErrorResultados, match="canal"):
-        cargar_csv(escribir("frame,track_id,x1,y1,x2,y2\n0,1,1,1,2,2\n"))
+        cargar_json(ruta)
 
 
-def test_valor_invalido_indica_linea():
-    with pytest.raises(ErrorResultados, match="Línea 3"):
-        cargar_csv(escribir(
-            "frame,track_id,x1,y1,x2,y2,canal\n0,1,1,1,2,2,1\nabc,1,1,1,2,2,1\n"))
+def test_valor_invalido_indica_deteccion(tmp_path):
+    filas = [BASE[0], {**BASE[0], "frame": "abc"}]
+    ruta = guardar(tmp_path, "incorrecto.json", {"detecciones": filas})
+    with pytest.raises(ErrorResultados, match="Detección 2"):
+        cargar_json(ruta)
 
 
-def test_archivo_sin_filas_o_inexistente():
+def test_archivo_sin_detecciones_o_inexistente(tmp_path):
     with pytest.raises(ErrorResultados):
-        cargar_csv(escribir("frame,track_id,x1,y1,x2,y2,canal\n"))
+        cargar_json(guardar(tmp_path, "vacio.json", {"detecciones": []}))
     with pytest.raises(ErrorResultados):
-        cargar_csv("/no/existe.csv")
+        cargar_json(tmp_path / "no_existe.json")
 
 
 def test_etiquetas():

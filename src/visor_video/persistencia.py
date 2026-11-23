@@ -1,7 +1,6 @@
 """Guardado y recuperación de proyectos del Validator."""
 
 from __future__ import annotations
-import csv
 from dataclasses import dataclass
 from datetime import datetime
 import json
@@ -9,7 +8,7 @@ from pathlib import Path
 
 from .correcciones import EventoConteo, Operacion, RegistroCorrecciones
 
-VERSION_PROYECTO = 1
+VERSION_PROYECTO = 2
 TIPO_PROYECTO = "validator-ia"
 
 
@@ -20,8 +19,8 @@ class ErrorPersistencia(Exception):
 @dataclass
 class ProyectoCargado:
     video: str | None
-    csvs: tuple[str, ...]
-    canales_csv: dict[str, str]
+    archivos_json: tuple[str, ...]
+    canales_json: dict[str, str]
     cuadro: int
     filtro: str
     lineas_conteo: dict[str, float]
@@ -130,8 +129,8 @@ def guardar_proyecto(
     registro,
     *,
     video=None,
-    csvs=(),
-    canales_csv=None,
+    archivos_json=(),
+    canales_json=None,
     cuadro=0,
     filtro="Todos (T1 + T2)",
     lineas_conteo=None,
@@ -141,13 +140,24 @@ def guardar_proyecto(
         raise ErrorPersistencia("No hay resultados ni correcciones para guardar.")
 
     destino = Path(ruta)
+    if destino.suffix.lower() != ".json":
+        raise ErrorPersistencia("El proyecto debe guardarse como archivo JSON.")
+    fuentes = tuple(archivos_json)
+    asignaciones = canales_json or {}
+    for fuente in fuentes:
+        if Path(fuente).suffix.lower() != ".json":
+            raise ErrorPersistencia("Los resultados del proyecto deben ser archivos JSON (.json).")
+    if any(Path(r).suffix.lower() != ".json" for r in asignaciones):
+        raise ErrorPersistencia("Las asignaciones de tubo deben corresponder a archivos JSON.")
+    if canales_archivo and Path(canales_archivo).suffix.lower() != ".json":
+        raise ErrorPersistencia("La configuración de canales debe ser un archivo JSON.")
     datos = {
         "tipo": TIPO_PROYECTO,
         "version": VERSION_PROYECTO,
         "guardado_en": datetime.now().isoformat(timespec="seconds"),
         "video": str(Path(video).resolve()) if video else None,
-        "csvs": [str(Path(r).resolve()) for r in csvs],
-        "canales_csv": {str(Path(k).resolve()): str(v) for k, v in (canales_csv or {}).items()},
+        "archivos_json": [str(Path(r).resolve()) for r in fuentes],
+        "canales_json": {str(Path(k).resolve()): str(v) for k, v in (asignaciones or {}).items()},
         "cuadro": int(cuadro),
         "filtro": str(filtro),
         "lineas_conteo": {str(k): float(v) for k, v in (lineas_conteo or {}).items()},
@@ -170,26 +180,39 @@ def guardar_proyecto(
 
 
 def cargar_proyecto(ruta):
+    if Path(ruta).suffix.lower() != ".json":
+        raise ErrorPersistencia("Solo se admiten proyectos JSON (.json).")
     try:
         datos = json.loads(Path(ruta).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ErrorPersistencia(f"No se pudo abrir el proyecto: {exc}") from exc
 
+    if not isinstance(datos, dict):
+        raise ErrorPersistencia("El proyecto JSON no tiene una estructura válida.")
     if datos.get("tipo") != TIPO_PROYECTO:
         raise ErrorPersistencia("El archivo no corresponde a un proyecto Validator-IA.")
     if datos.get("version") != VERSION_PROYECTO:
         raise ErrorPersistencia("La versión del proyecto no es compatible.")
 
     try:
+        fuentes = tuple(str(r) for r in datos["archivos_json"])
+        asignaciones = {str(k): str(v) for k, v in datos["canales_json"].items()}
+        if any(Path(r).suffix.lower() != ".json" for r in fuentes):
+            raise ErrorPersistencia("El proyecto hace referencia a resultados que no son JSON.")
+        if any(Path(r).suffix.lower() != ".json" for r in asignaciones):
+            raise ErrorPersistencia("El proyecto contiene asignaciones a archivos que no son JSON.")
+        ruta_canales = datos.get("canales_archivo")
+        if ruta_canales and Path(ruta_canales).suffix.lower() != ".json":
+            raise ErrorPersistencia("La configuración de canales del proyecto no es JSON.")
         return ProyectoCargado(
             video=datos.get("video"),
-            csvs=tuple(str(r) for r in datos.get("csvs", [])),
-            canales_csv={str(k): str(v) for k, v in datos.get("canales_csv", {}).items()},
+            archivos_json=fuentes,
+            canales_json=asignaciones,
             cuadro=max(0, int(datos.get("cuadro", 0))),
             filtro=str(datos.get("filtro", "Todos (T1 + T2)")),
             lineas_conteo={str(k): float(v) for k, v in datos.get("lineas_conteo", {}).items()},
             registro=registro_desde_dict(datos["correcciones"]),
-            canales_archivo=datos.get("canales_archivo"),
+            canales_archivo=ruta_canales,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ErrorPersistencia("El archivo de proyecto está incompleto.") from exc
@@ -209,22 +232,36 @@ def describir_operacion(op: Operacion):
     nombres = {"AGREGAR": "Agregar", "ELIMINAR": "Eliminar"}
     return f"{hora}  {nombres.get(op.tipo, op.tipo.title())}  {ubicacion}".strip()
 
-def exportar_conteo_csv(ruta, registro, fps=None):
-    """Escribe el conteo final (con correcciones) en un CSV, un evento por fila.
-
-    `frame` usa base 0, igual que el CSV del Tracker. `tiempo_s` se calcula solo si se da `fps`.
-    """
+def exportar_conteo_json(ruta, registro, fps=None):
+    """Exporta los eventos corregidos a JSON sin cambiar los archivos de origen."""
     if registro is None:
         raise ErrorPersistencia("No hay conteos para exportar.")
     destino = Path(ruta)
+    if destino.suffix.lower() != ".json":
+        raise ErrorPersistencia("La exportación de conteos debe ser un archivo JSON.")
+    datos = {
+        "tipo": "conteo-validator-ia",
+        "version": 1,
+        "exportado_en": datetime.now().isoformat(timespec="seconds"),
+        "conteos": registro.conteos(),
+        "total": registro.total,
+        "eventos": [
+            {
+                "canal": e.canal,
+                "frame": e.cuadro,
+                "tiempo_s": round(e.cuadro / fps, 3) if fps and fps > 0 else None,
+                "id_pez": e.id_pez,
+                "origen": e.origen,
+            }
+            for e in registro.eventos()
+        ],
+    }
+    temporal = destino.with_suffix(destino.suffix + ".tmp")
     try:
         destino.parent.mkdir(parents=True, exist_ok=True)
-        with open(destino, "w", newline="", encoding="utf-8-sig") as archivo:
-            escritor = csv.writer(archivo)
-            escritor.writerow(["canal", "frame", "tiempo_s", "id_pez", "origen"])
-            for e in registro.eventos():
-                tiempo = f"{e.cuadro / fps:.3f}" if fps else ""
-                escritor.writerow([e.canal, e.cuadro, tiempo, e.id_pez or "", e.origen])
+        temporal.write_text(json.dumps(datos, indent=2, ensure_ascii=False), encoding="utf-8")
+        temporal.replace(destino)
     except OSError as exc:
+        temporal.unlink(missing_ok=True)
         raise ErrorPersistencia(f"No se pudo exportar el conteo: {exc}") from exc
     return destino

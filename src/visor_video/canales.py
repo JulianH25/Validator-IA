@@ -52,7 +52,9 @@ def _canal_desde_dict(id_canal, d):
 
 
 def cargar_canales(ruta):
-    """Lee el archivo de canales del Tracker. Devuelve {id_canal: Canal}."""
+    """Lee la configuración JSON de canales del tracker."""
+    if Path(ruta).suffix.lower() != ".json":
+        raise ErrorCanales("La configuración de canales debe ser un archivo JSON.")
     try:
         datos = json.loads(Path(ruta).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:

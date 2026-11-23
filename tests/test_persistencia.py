@@ -44,23 +44,23 @@ def test_registro_roundtrip_conserva_estado_historial_y_deshacer():
     assert restaurado.eventos() == original.eventos()
 
 
-def test_guardar_no_modifica_csv_original(tmp_path):
-    csv = tmp_path / "tracker.csv"
-    csv.write_text("frame,track_id,x1,y1,x2,y2,canal\n0,A,1,2,3,4,1\n", encoding="utf-8")
-    antes = csv.read_bytes()
+def test_guardar_no_modifica_json_original(tmp_path):
+    fuente = tmp_path / "tracker.json"
+    fuente.write_text('{"detecciones":[{"frame":0,"track_id":"A","x1":1,"y1":2,"x2":3,"y2":4,"canal":"1"}]}', encoding="utf-8")
+    antes = fuente.read_bytes()
     proyecto = tmp_path / "sesion.validator.json"
 
-    guardar_proyecto(proyecto, registro_editado(), csvs=[csv])
+    guardar_proyecto(proyecto, registro_editado(), archivos_json=[fuente])
 
     assert proyecto.exists()
-    assert csv.read_bytes() == antes
+    assert fuente.read_bytes() == antes
 
 
 def test_guardar_y_reabrir_restaura_conteos_rutas_y_vista(tmp_path):
     video = tmp_path / "video.mp4"
-    csv1 = tmp_path / "tracker_tubo1.csv"
-    csv2 = tmp_path / "tracker_tubo2.csv"
-    for archivo in (video, csv1, csv2):
+    fuente1 = tmp_path / "tracker_tubo1.json"
+    fuente2 = tmp_path / "tracker_tubo2.json"
+    for archivo in (video, fuente1, fuente2):
         archivo.write_bytes(b"prueba")
 
     r = registro_editado()
@@ -69,8 +69,8 @@ def test_guardar_y_reabrir_restaura_conteos_rutas_y_vista(tmp_path):
         proyecto,
         r,
         video=video,
-        csvs=[csv1, csv2],
-        canales_csv={str(csv1): "1", str(csv2): "2"},
+        archivos_json=[fuente1, fuente2],
+        canales_json={str(fuente1): "1", str(fuente2): "2"},
         cuadro=57,
         filtro="Tubo 2",
         lineas_conteo={"1": 280, "2": 300},
@@ -78,8 +78,8 @@ def test_guardar_y_reabrir_restaura_conteos_rutas_y_vista(tmp_path):
 
     cargado = cargar_proyecto(proyecto)
     assert Path(cargado.video) == video.resolve()
-    assert tuple(Path(ruta) for ruta in cargado.csvs) == (csv1.resolve(), csv2.resolve())
-    assert cargado.canales_csv[str(csv1.resolve())] == "1"
+    assert tuple(Path(ruta) for ruta in cargado.archivos_json) == (fuente1.resolve(), fuente2.resolve())
+    assert cargado.canales_json[str(fuente1.resolve())] == "1"
     assert cargado.cuadro == 57
     assert cargado.filtro == "Tubo 2"
     assert cargado.lineas_conteo == {"1": 280.0, "2": 300.0}

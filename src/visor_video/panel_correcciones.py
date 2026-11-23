@@ -250,7 +250,7 @@ class PanelCorrecciones(tk.Frame):
     def _hay_registro(self):
         if self.registro is None:
             messagebox.showinfo("Carga los resultados",
-                                "Carga el CSV del tracker para poder corregir conteos.")
+                                "Carga la configuración JSON del tracker para poder corregir conteos.")
             return False
         return True
 

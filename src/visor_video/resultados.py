@@ -1,8 +1,9 @@
-import csv
+import json
 import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 
 # Cambiar a 1 si el tracker numera desde 1.
 PRIMER_CUADRO = 0
@@ -29,7 +30,7 @@ class ErrorResultados(Exception):
 
 
 class ErrorSinCanal(ErrorResultados):
-    """El archivo no tiene columna de canal (típico: un archivo por tubo)."""
+    """El JSON no indica el canal (típico: un archivo por tubo)."""
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,7 @@ class Resultados:
         }
 
 
-def _buscar_columnas(encabezado, canal_defecto=None):
+def _buscar_campos(encabezado, canal_defecto=None):
     normal = {nombre.strip().lower(): nombre for nombre in encabezado}
 
     def buscar(clave):
@@ -119,8 +120,8 @@ def _buscar_columnas(encabezado, canal_defecto=None):
         faltan.append("caja (x1,y1,x2,y2 o x,y,w,h)")
     if faltan:
         mensaje = (
-            "Al archivo le faltan columnas: " + ", ".join(faltan) + ".\n"
-            "Columnas encontradas: " + ", ".join(encabezado)
+            "Al archivo le faltan campos: " + ", ".join(faltan) + ".\n"
+            "Campos encontrados: " + ", ".join(encabezado)
         )
         if faltan == ["canal"]:
             raise ErrorSinCanal(mensaje)
@@ -128,86 +129,89 @@ def _buscar_columnas(encabezado, canal_defecto=None):
     return columnas
 
 
-def cargar_csv(ruta, canal_defecto=None):
-    """Lee el CSV del Tracker y devuelve un objeto Resultados.
-
-    Si el archivo no trae columna de canal (un archivo por tubo), todas
-    sus filas se asignan a `canal_defecto`.
-    """
+def cargar_json(ruta, canal_defecto=None):
+    """Lee las detecciones de un JSON del tracker."""
+    if Path(ruta).suffix.lower() != ".json":
+        raise ErrorResultados("Solo se admiten archivos JSON (.json).")
     try:
-        with open(ruta, newline="", encoding="utf-8-sig") as archivo:
-            muestra = archivo.read(4096)
-            archivo.seek(0)
-            try:
-                dialecto = csv.Sniffer().sniff(muestra, delimiters=",;\t")
-            except csv.Error:
-                dialecto = csv.excel
-            lector = csv.DictReader(archivo, dialect=dialecto)
-            if not lector.fieldnames:
-                raise ErrorResultados("El archivo está vacío.")
-            col = _buscar_columnas(lector.fieldnames, canal_defecto)
+        datos = json.loads(Path(ruta).read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ErrorResultados(f"No se pudo leer el JSON: {exc}") from exc
 
-            detecciones = []
-            for n_linea, fila in enumerate(lector, start=2):
+    if isinstance(datos, dict):
+        filas = datos.get("detecciones", datos.get("resultados"))
+    else:
+        filas = datos
+    if not isinstance(filas, list):
+        raise ErrorResultados(
+            "El JSON debe tener una lista «detecciones» (o ser una lista de detecciones)."
+        )
+    if not filas:
+        raise ErrorResultados("El JSON no tiene detecciones.")
+    if not all(isinstance(fila, dict) for fila in filas):
+        raise ErrorResultados("Cada detección debe ser un objeto JSON.")
+
+    columnas = _buscar_campos(list(filas[0]), canal_defecto)
+    detecciones = []
+    for indice, fila in enumerate(filas, start=1):
+        try:
+            def valor(clave):
+                dato = fila[columnas[clave]]
+                if isinstance(dato, bool) or dato is None:
+                    raise ValueError
+                return float(dato)
+
+            cuadro = int(valor("frame")) - PRIMER_CUADRO
+            if cuadro < 0:
+                raise ValueError
+            if columnas["formato_caja"] == "esquinas":
+                x1, y1, x2, y2 = (int(valor(k)) for k in ("x1", "y1", "x2", "y2"))
+            else:
+                x, y, w, h = (valor(k) for k in ("x", "y", "w", "h"))
+                x1, y1, x2, y2 = int(x), int(y), int(x + w), int(y + h)
+            id_pez = str(fila[columnas["id"]]).strip()
+            if not id_pez or fila[columnas["id"]] is None:
+                raise ValueError
+            canal = (str(canal_defecto) if columnas["canal"] is None
+                     else str(fila[columnas["canal"]]).strip())
+            if not canal or canal == "None":
+                raise ValueError
+            if x2 <= x1 or y2 <= y1:
+                raise ValueError
+        except (ValueError, TypeError, KeyError, OverflowError):
+            raise ErrorResultados(
+                f"Detección {indice}: faltan datos o hay coordenadas, frame o ID inválidos."
+            ) from None
+
+        timestamp_ms = None
+        if columnas["timestamp"] is not None:
+            tiempo = fila.get(columnas["timestamp"])
+            if tiempo is not None and str(tiempo).strip() != "":
                 try:
-                    cuadro = int(float(fila[col["frame"]])) - PRIMER_CUADRO
-                    if col["formato_caja"] == "esquinas":
-                        x1, y1, x2, y2 = (
-                            int(float(fila[col[k]])) for k in ("x1", "y1", "x2", "y2")
-                        )
-                    else:
-                        x, y, w, h = (
-                            float(fila[col[k]]) for k in ("x", "y", "w", "h")
-                        )
-                        x1, y1, x2, y2 = int(x), int(y), int(x + w), int(y + h)
-                except (ValueError, TypeError, KeyError):
-                    raise ErrorResultados(
-                        f"Línea {n_linea}: hay un valor que no es un número "
-                        "o falta un dato."
-                    )
-                timestamp_ms = None
-                if col["timestamp"] is not None:
-                    valor_tiempo = str(fila.get(col["timestamp"], "")).strip()
-                    if valor_tiempo:
-                        try:
-                            timestamp_ms = int(float(valor_tiempo))
-                        except ValueError:
-                            raise ErrorResultados(
-                                f"Línea {n_linea}: el tiempo no es un número válido."
-                            )
+                    if isinstance(tiempo, bool):
+                        raise ValueError
+                    timestamp_ms = int(float(tiempo))
+                except (ValueError, TypeError, OverflowError):
+                    raise ErrorResultados(f"Detección {indice}: tiempo inválido.") from None
 
-                contado = False
-                if col["contado"] is not None:
-                    valor_contado = str(fila.get(col["contado"], "")).strip().lower()
-                    contado = valor_contado in {
-                        "1", "true", "si", "sí", "yes", "y", "conteo", "counted"
-                    }
+        contado = False
+        if columnas["contado"] is not None:
+            valor_contado = fila.get(columnas["contado"], False)
+            contado = (valor_contado is True or str(valor_contado).strip().lower() in {
+                "1", "true", "si", "sí", "yes", "y", "conteo", "counted"
+            })
 
-                detecciones.append(
-                    Deteccion(
-                        cuadro=cuadro,
-                        id_pez=str(fila[col["id"]]).strip(),
-                        x1=x1, y1=y1, x2=x2, y2=y2,
-                        canal=(str(canal_defecto) if col["canal"] is None
-                               else str(fila[col["canal"]]).strip()),
-                        timestamp_ms=timestamp_ms,
-                        contado=contado,
-                    )
-                )
-    except OSError as error:
-        raise ErrorResultados(f"No se pudo abrir el archivo: {error}")
-    except UnicodeDecodeError:
-        raise ErrorResultados("El archivo no está en texto UTF-8 válido.")
-
-    if not detecciones:
-        raise ErrorResultados("El archivo no tiene detecciones.")
+        detecciones.append(Deteccion(
+            cuadro, id_pez, x1, y1, x2, y2, canal,
+            timestamp_ms=timestamp_ms, contado=contado,
+        ))
     return Resultados(detecciones)
 
 
 def canal_desde_nombre(ruta):
     """Intenta leer el tubo del nombre del archivo.
 
-    'tracking_tubo1.csv' -> '1', 'canal_2.csv' -> '2', 'salida_t2.csv' -> '2'.
+    'tracking_tubo1.json' -> '1', 'canal_2.json' -> '2', 'salida_t2.json' -> '2'.
     Devuelve None si el nombre no lo dice.
     """
     nombre = os.path.splitext(os.path.basename(str(ruta)))[0].lower()
@@ -216,13 +220,13 @@ def canal_desde_nombre(ruta):
 
 
 def cargar_varios(rutas, resolver_canal=None):
-    """Carga uno o varios CSV del Tracker y los junta en un solo Resultados.
+    """Carga uno o varios archivos JSON del tracker en un solo Resultados.
 
     Soporta los dos casos:
-      - un archivo con los dos tubos (columna de canal), o
-      - un archivo por tubo (sin columna de canal).
+      - un archivo con los dos tubos (campo de canal), o
+      - un archivo por tubo (sin campo de canal).
 
-    Para un archivo sin columna de canal, el tubo se toma del nombre del
+    Para un archivo sin campo de canal, el tubo se toma del nombre del
     archivo; si el nombre no lo dice, se llama a `resolver_canal(ruta)`
     (en el visor, pregunta al usuario). Cada canal debe venir de un solo
     archivo.
@@ -237,18 +241,18 @@ def cargar_varios(rutas, resolver_canal=None):
         nombre = os.path.basename(str(ruta))
         try:
             try:
-                parcial = cargar_csv(ruta)
+                parcial = cargar_json(ruta)
             except ErrorSinCanal:
                 canal = canal_desde_nombre(ruta)
                 if canal is None and resolver_canal is not None:
                     canal = resolver_canal(ruta)
                 if canal is None:
                     raise ErrorResultados(
-                        "El archivo no tiene columna de canal y no se pudo saber "
-                        "a qué tubo corresponde. Agrega la columna 'canal' o "
-                        "nombra el archivo, por ejemplo, tracking_tubo1.csv."
+                        "El archivo no tiene campo de canal y no se pudo saber "
+                        "a qué tubo corresponde. Agrega el campo 'canal' o "
+                        "nombra el archivo, por ejemplo, tracking_tubo1.json."
                     )
-                parcial = cargar_csv(ruta, canal_defecto=canal)
+                parcial = cargar_json(ruta, canal_defecto=canal)
         except ErrorResultados as exc:
             raise ErrorResultados(f"{nombre}: {exc}" if varios else str(exc))
         for canal in parcial.canales:
@@ -261,4 +265,3 @@ def cargar_varios(rutas, resolver_canal=None):
         detecciones.extend(parcial.detecciones)
     return Resultados(detecciones)
 
-    return salida

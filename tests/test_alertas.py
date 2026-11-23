@@ -62,17 +62,16 @@ def test_no_repite_pareja_junta_en_cuadros_consecutivos():
     assert len(alertas) == 1
 
 
-def test_csv_acepta_tiempo_y_evento_de_conteo(tmp_path):
-    from visor_video.resultados import cargar_csv
+def test_json_acepta_tiempo_y_evento_de_conteo(tmp_path):
+    import json
+    from visor_video.resultados import cargar_json
 
-    ruta = tmp_path / "tracker.csv"
-    ruta.write_text(
-        "frame,track_id,x1,y1,x2,y2,canal,timestamp_ms,contado\n"
-        "10,A,10,10,50,40,1,1000,1\n"
-        "12,A,20,10,60,40,1,1070,1\n",
-        encoding="utf-8",
-    )
-    r = cargar_csv(ruta)
+    ruta = tmp_path / "tracker.json"
+    ruta.write_text(json.dumps({"detecciones": [
+        {"frame": 10, "track_id": "A", "x1": 10, "y1": 10, "x2": 50, "y2": 40, "canal": "1", "timestamp_ms": 1000, "contado": True},
+        {"frame": 12, "track_id": "A", "x1": 20, "y1": 10, "x2": 60, "y2": 40, "canal": "1", "timestamp_ms": 1070, "contado": True},
+    ]}), encoding="utf-8")
+    r = cargar_json(ruta)
     assert r.detecciones[0].timestamp_ms == 1000
     assert r.detecciones[0].contado is True
     assert not any(a.tipo == "POSIBLE_DUPLICADO" for a in MotorAlertas().analizar(r.detecciones))
