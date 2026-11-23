@@ -412,14 +412,6 @@ def _cargar_canales_desde_ruta(ruta):
     return True
 
 
-def cargar_canales_tracker():
-    ruta = filedialog.askopenfilename(
-        filetypes=[("Canales del Tracker", "*.json"), ("Todos", "*.*")]
-    )
-    if ruta:
-        _cargar_canales_desde_ruta(ruta)
-
-
 def _actualizar_estado_lineas():
     if estado_lineas is None:
         return
@@ -1118,7 +1110,6 @@ def main(nombre_usuario=None):
 
     _boton(barra, "Cargar video", cargar_video, compacto=True).pack(side="left", padx=(5, 6))
     _boton(barra, "Cargar configuración", cargar_resultados, compacto=True).pack(side="left", padx=(0, 6))
-    _boton(barra, "Canales", cargar_canales_tracker, compacto=True).pack(side="left", padx=(0, 6))
     _boton(barra, "Abrir proyecto", abrir_proyecto_guardado, compacto=True).pack(side="left", padx=(0, 6))
     _boton(barra, "Guardar proyecto", guardar_proyecto_actual, compacto=True).pack(side="left", padx=(0, 6))
     _boton(barra, "Exportar configuración", exportar_conteo, compacto=True).pack(side="left", padx=(0, 14))
