@@ -75,6 +75,7 @@ visor = None
 menu_canal = None
 texto_cuadro = None
 texto_tiempo = None
+texto_conteo = None
 texto_alertas = None
 texto_video = None
 texto_configuracion = None
@@ -790,6 +791,34 @@ def _formatear_tiempo(cuadro):
     return f"{minutos:02d}:{segundos % 60:05.2f}"
 
 
+def _conteo_hasta_frame(cuadro):
+    """Calcula el conteo acumulado hasta el cuadro actual.
+
+    Usa el RegistroCorrecciones para que el contador de la pantalla
+    refleje también altas, bajas y movimientos hechos por el usuario.
+    """
+    conteos = {canal: 0 for canal in TUBOS}
+    if panel_correcciones is None or panel_correcciones.registro is None:
+        return conteos
+
+    registro = panel_correcciones.registro
+    for evento in registro.eventos():
+        if evento.cuadro <= cuadro and evento.canal in conteos:
+            conteos[evento.canal] += 1
+    return conteos
+
+
+def _actualizar_contador():
+    if texto_conteo is None:
+        return
+
+    conteos = _conteo_hasta_frame(cuadro_actual)
+    total = sum(conteos.values())
+    texto_conteo.configure(
+        text=f"T1  {conteos["1"]:02d}   ·   T2  {conteos["2"]:02d}   ·   TOTAL  {total:02d}"
+    )
+
+
 def mostrar_cuadro():
     if video is None or visor is None:
         return
@@ -818,6 +847,7 @@ def mostrar_cuadro():
         texto_cuadro.configure(text=f"FRAME  {cuadro_actual + 1:,} / {total_cuadros:,}")
     if texto_tiempo is not None:
         texto_tiempo.configure(text=f"{_formatear_tiempo(cuadro_actual)} s")
+    _actualizar_contador()
     _dibujar_timeline()
     _resaltar_tarjetas()
 
@@ -1062,7 +1092,7 @@ def _cerrar():
 
 
 def main(nombre_usuario=None):
-    global ventana, visor, texto_cuadro, texto_tiempo, texto_alertas
+    global ventana, visor, texto_cuadro, texto_tiempo, texto_conteo, texto_alertas
     global menu_canal, texto_video, texto_configuracion, timeline, boton_play
     global panel_tarjetas, canvas_alertas, estado_visor, estado_lineas
     global panel_correcciones, usuario_actual, boton_revisada
@@ -1157,6 +1187,9 @@ def main(nombre_usuario=None):
     texto_cuadro.pack(side="left", padx=15)
     texto_tiempo = _etiqueta(telemetria, "00:00.00 s", MUTED, (MONO, 10))
     texto_tiempo.pack(side="right", padx=15)
+    texto_conteo = _etiqueta(telemetria, "T1  00   ·   T2  00   ·   TOTAL  00", GREEN,
+                             (MONO, 10, "bold"))
+    texto_conteo.pack(side="left", expand=True)
 
     timeline = tk.Canvas(izquierda, bg=PANEL, height=35, highlightthickness=0,
                          cursor="hand2")
