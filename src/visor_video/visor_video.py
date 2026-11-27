@@ -22,7 +22,7 @@ try:
     from .correcciones import eventos_desde_resultados
     from .panel_correcciones import PanelCorrecciones
     from .persistencia import ErrorPersistencia, cargar_proyecto, exportar_conteo_json, guardar_proyecto
-    from .importar_tracker import ErrorImportacion, convertir as convertir_tracker
+    from .importar_tracker import ErrorImportacion, convertir as convertir_tracker, necesita_conversion
     from .login import VentanaLogin
     from .database import guardar_correccion, obtener_usuario
     from . import sesion
@@ -34,7 +34,7 @@ except ImportError:
     from correcciones import eventos_desde_resultados
     from panel_correcciones import PanelCorrecciones
     from persistencia import ErrorPersistencia, cargar_proyecto, exportar_conteo_json, guardar_proyecto
-    from importar_tracker import ErrorImportacion, convertir as convertir_tracker
+    from importar_tracker import ErrorImportacion, convertir as convertir_tracker, necesita_conversion
     from login import VentanaLogin
     from database import guardar_correccion, obtener_usuario
     import sesion
@@ -188,7 +188,6 @@ def _cargar_video_desde_frames():
     if fps is None:
         return
 
-    # El video queda junto a la carpeta: .../seq_0004/  ->  .../seq_0004.mp4
     base = Path(carpeta)
     destino = base.parent / f"{base.name}.mp4"
     if destino.exists():
@@ -351,7 +350,7 @@ def cargar_resultados():
     )
     if not rutas:
         return
-    if any(Path(r).suffix.lower() == ".csv" for r in rutas):
+    if necesita_conversion(rutas):
         try:
             convertido = convertir_tracker(rutas)
         except ErrorImportacion as exc:

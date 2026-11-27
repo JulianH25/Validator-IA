@@ -160,6 +160,67 @@ def desde_tracker_b(resultados, detecciones_csv, desfase=0):
     return _armar(video, lista, detecciones, eventos)
 
 
+# ---------------------------------------------------------------- tracker C
+
+def desde_tracker_c(ruta):
+    d = leer_json(ruta)
+    s = d["secuencia"]
+
+    lista = []
+    for ch in d["canales"]:
+        if ch.get("activo") is False:
+            continue
+        x1, y1, x2, y2 = (float(v) for v in ch["caja"])
+        lista.append({
+            "id": num_canal(ch["id"]),
+            "nombre": ch.get("nombre") or f"Tubo {num_canal(ch['id'])}",
+            "caja": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
+            "linea_y": round(float(ch["linea_b_y"]), 1),
+        })
+
+    detecciones = []
+    for c in d["cuadros"]:
+        for t in c.get("trayectorias", []):
+            detecciones.append({
+                "cuadro": int(c["cuadro"]),
+                "canal": num_canal(t["canal"]),
+                "id": str(t["id"]).strip(),
+                "x1": round(float(t["x1"]), 1),
+                "y1": round(float(t["y1"]), 1),
+                "x2": round(float(t["x2"]), 1),
+                "y2": round(float(t["y2"]), 1),
+                "conf": t.get("conf"),
+                "timestamp_ms": int(round(float(c["tiempo_s"]) * 1000)),
+                "contado": False,
+            })
+    detecciones.sort(key=lambda x: (x["cuadro"], x["canal"], x["id"]))
+
+    eventos = [{
+        "cuadro": int(e["cuadro"]),
+        "canal": num_canal(e["canal"]),
+        "id": str(e["id"]).strip(),
+        "tiempo_s": round(float(e["tiempo_s"]), 3),
+    } for e in d["conteo"]["eventos"]]
+    eventos.sort(key=lambda e: (e["cuadro"], e["canal"], e["id"]))
+
+    video = {
+        "archivo": Path(str(s["video"]).replace("\\", "/")).name,
+        "fps": float(s["fps"]),
+        "ancho": int(s["ancho"]),
+        "alto": int(s["alto"]),
+        "cuadros": int(s["cuadros"]),
+    }
+    return _armar(video, lista, detecciones, eventos)
+
+
+def necesita_conversion(rutas):
+    """True si hay CSV del tracker o un JSON que aún no está en formato común."""
+    return any(
+        Path(r).suffix.lower() == ".csv" or _clasificar(r) == "tracker_c"
+        for r in rutas
+    )
+
+
 # ---------------------------------------------------------------- detección de archivos
 
 
@@ -193,6 +254,8 @@ def _clasificar(ruta):
         d = _json(ruta)
         if not isinstance(d, dict):
             return None
+        if d.get("formato") == "tracker-resultados" and "cuadros" in d:
+            return "tracker_c"
         canales = d.get("canales")
         if isinstance(d.get("eventos"), list) and isinstance(canales, list) and "video" in d:
             return "resultados"
@@ -224,7 +287,16 @@ def convertir(rutas, destino=None):
     rutas = [str(r) for r in rutas]
     roles = clasificar(rutas)
 
-    if "resultados" in roles:
+
+    if "tracker_c" in roles:
+        if len(roles) > 1:
+            raise ErrorImportacion("El JSON del tracker ya trae todo: selecciónalo solo.")
+        try:
+            datos = desde_tracker_c(roles["tracker_c"])
+        except (KeyError, ValueError, TypeError, OSError) as exc:
+            raise ErrorImportacion(f"No se pudo convertir la salida del tracker: {exc!r}") from exc
+        referencia = roles["tracker_c"]
+    elif "resultados" in roles:
         tray = roles.get("trayectorias") or roles.get("detecciones")
         if tray is None:
             raise ErrorImportacion("Falta el CSV de detecciones junto a resultados.json.")
