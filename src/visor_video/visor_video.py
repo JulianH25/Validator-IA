@@ -732,6 +732,7 @@ def _color_alerta(alerta):
         "PERDIDA_SEGUIMIENTO": AMBER,
         "APARICION_UN_CUADRO": AMBER,
         "INICIO_BAJO_LINEA": RED,
+        "ID_REUTILIZADO": RED,
     }.get(alerta.tipo, RED)
 
 
@@ -741,6 +742,7 @@ def _titulo_alerta(alerta):
         "PERDIDA_SEGUIMIENTO": "Pérdida de seguimiento",
         "APARICION_UN_CUADRO": "ID en un solo frame",
         "INICIO_BAJO_LINEA": "Aparición bajo la línea",
+        "ID_REUTILIZADO": "ID reutilizado",
     }.get(alerta.tipo, alerta.tipo.replace("_", " ").title())
 
 

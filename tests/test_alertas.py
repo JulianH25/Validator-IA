@@ -1,4 +1,4 @@
-from visor_video.alertas import MotorAlertas
+from visor_video.alertas import ConfiguracionAlertas, MotorAlertas
 from visor_video.resultados import Deteccion
 
 def d(cuadro, pez, x1, y1, x2, y2, canal="1", timestamp_ms=None, contado=False):
@@ -24,13 +24,25 @@ def test_detecta_peces_muy_juntos():
     assert any(a.tipo == "PECES_JUNTOS" and a.cuadro == 10 for a in alertas)
 
 
-def test_detecta_perdida_y_reaparicion():
-    datos = [
-        d(20, "A", 100, 100, 160, 140),
-        d(24, "A", 100, 120, 160, 160),
-    ]
+def _pez(id_pez, cuadros, canal="1", x=100):
+    return [d(c, id_pez, x, 100 + 10 * (c - 20), x + 60, 140 + 10 * (c - 20), canal)
+            for c in cuadros]
+
+
+def test_track_recien_nacido_no_es_perdida():
+    # Aparece 1 cuadro, desaparece 2 y vuelve: está entrando, no se perdió.
+    datos = [d(296, "18", 100, 10, 160, 50), d(300, "18", 100, 20, 160, 60)]
     alertas = MotorAlertas().analizar(datos)
-    assert any(a.tipo == "PERDIDA_SEGUIMIENTO" and a.cuadro == 21 for a in alertas)
+    assert not any(a.tipo == "PERDIDA_SEGUIMIENTO" for a in alertas)
+
+
+def test_mismo_id_en_dos_tubos_no_se_mezcla():
+    # ID 18 en tubo 1 y en tubo 2: cada track se evalúa por separado.
+    datos = [d(c, "18", 100, 10, 160, 50, canal="1") for c in (10, 11, 12)]
+    datos += [d(296, "18", 100, 10, 160, 50, canal="2"),
+              d(300, "18", 100, 20, 160, 60, canal="2")]
+    alertas = MotorAlertas().analizar(datos)
+    assert not any(a.tipo == "PERDIDA_SEGUIMIENTO" for a in alertas)
 
 
 def test_no_emite_alerta_duplicado_en_mismo_cuadro():
@@ -87,3 +99,24 @@ def test_ir_a_frame_actualiza_el_reproductor(monkeypatch):
 
     app.ir_a_frame(42)
     assert app.cuadro_actual == 42
+
+def test_id_reutilizado_bajo_la_linea_da_dos_alertas():
+    config = ConfiguracionAlertas(lineas_conteo_y_px={"1": 150.0})
+    datos = _pez("13", range(20, 26))                       # pez anterior, sale bajo la línea
+    datos += [d(c, "13", 100, 260 + 4 * (c - 60), 160, 300 + 4 * (c - 60))
+              for c in range(60, 64)]                        # pez nuevo, mismo ID, bajo la línea
+    alertas = MotorAlertas(config).analizar(datos)
+    tipos_60 = {a.tipo for a in alertas if a.cuadro == 60}
+    assert {"ID_REUTILIZADO", "INICIO_BAJO_LINEA"} <= tipos_60
+
+
+def test_id_reutilizado_por_hueco_largo_sin_linea():
+    datos = _pez("5", range(20, 24)) + _pez("5", range(80, 84))
+    alertas = MotorAlertas().analizar(datos)
+    reuso = [a for a in alertas if a.tipo == "ID_REUTILIZADO"]
+    assert len(reuso) == 1 and reuso[0].cuadro == 80
+
+
+def test_hueco_corto_del_mismo_pez_no_es_reuso():
+    datos = _pez("A", (20, 21, 22, 26))
+    assert not any(a.tipo == "ID_REUTILIZADO" for a in MotorAlertas().analizar(datos))
